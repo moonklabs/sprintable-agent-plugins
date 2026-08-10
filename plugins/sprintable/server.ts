@@ -17,6 +17,22 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isInjectableEventType } from './inject-allowlist'
+import { readFileSync, chmodSync } from 'fs'
+import { homedir } from 'os'
+import { join } from 'path'
+
+// Load ~/.claude/channels/sprintable/.env into process.env (real env wins).
+// Plugin-spawned servers get no env block — this is where the API key lives when
+// set via /sprintable:configure. Launcher env injection still works as a fallback.
+const STATE_DIR = process.env.SPRINTABLE_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'sprintable')
+const ENV_FILE = join(STATE_DIR, '.env')
+try {
+  chmodSync(ENV_FILE, 0o600) // credential — lock to owner
+  for (const line of readFileSync(ENV_FILE, 'utf8').split('\n')) {
+    const m = line.match(/^(\w+)=(.*)$/)
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2]
+  }
+} catch {}
 
 const API_URL = (
   process.env.SPRINTABLE_API_URL ?? 'https://sprintable-backend-dev-57iommnikq-du.a.run.app'
@@ -41,11 +57,11 @@ let latestInboundMeta: InboundMeta | undefined
 // ── MCP server ──────────────────────────────────────────────────────────────
 
 const mcp = new Server(
-  { name: 'fakechat', version: '0.2.0' },
+  { name: 'sprintable', version: '0.2.0' },
   {
     capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
     instructions:
-      'Sprintable 게이트웨이 이벤트가 <channel source="fakechat"> 블록으로 도착한다. ' +
+      'Sprintable 게이트웨이 이벤트가 <channel source="sprintable"> 블록으로 도착한다. ' +
       '응답은 reply 도구를 사용하는.',
   },
 )
@@ -117,6 +133,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
 await mcp.connect(new StdioServerTransport())
 
+// ── parent-death guard ───────────────────────────────────────────────────────
+// stdin 은 호스트 세션(claude)이 물려준 MCP transport 파이프다. 세션이 죽으면 stdin 이
+// EOF 를 맞는다. 이 가드가 없으면 아래 SSE 재연결 루프(while true)가 프로세스를 영원히
+// 살려 둬 고아(PPID→1)로 남고, Agent Gateway 스트림 슬롯을 영구히 물어 재기동 뒤 "키당 3"
+// 한도를 포화시킨다(2026-08-10 ortega 10일 고아 PID 38453 근본원인). 부모와 함께 죽는다.
+process.stdin.on('end', () => process.exit(0))
+process.stdin.on('close', () => process.exit(0))
+// 백스톱: stdin EOF 를 못 받은 채 init(PID 1)로 재양육되면(=완전 고아·2026-08-10 PID 38453
+// 이 형태였다) 자진 종료. unref 로 이 타이머 자체가 프로세스를 살려 두진 않게 한다.
+setInterval(() => { if (process.ppid === 1) process.exit(0) }, 15_000).unref()
+
 // ── channel deliver ──────────────────────────────────────────────────────────
 
 function deliver(
@@ -184,12 +211,12 @@ async function _sendAck(seq: number): Promise<void> {
     })
     if (resp.ok) {
       _lastAcked = seq
-      process.stderr.write(`[fakechat] ack seq=${seq}\n`)
+      process.stderr.write(`[sprintable] ack seq=${seq}\n`)
     } else {
-      process.stderr.write(`[fakechat] ack HTTP ${resp.status} seq=${seq}\n`)
+      process.stderr.write(`[sprintable] ack HTTP ${resp.status} seq=${seq}\n`)
     }
   } catch (e) {
-    process.stderr.write(`[fakechat] ack error seq=${seq}: ${e}\n`)
+    process.stderr.write(`[sprintable] ack error seq=${seq}: ${e}\n`)
   }
 }
 
@@ -266,7 +293,7 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
       : undefined
 
   process.stderr.write(
-    `[fakechat] inbound seq=${seq} conv=${conversationId} from=${senderName}: ${content.slice(0, 80)}\n`,
+    `[sprintable] inbound seq=${seq} conv=${conversationId} from=${senderName}: ${content.slice(0, 80)}\n`,
   )
 
   deliver(eventId, content, undefined, meta)
@@ -284,10 +311,28 @@ async function _consumeStream(): Promise<void> {
   if (_lastEventId) headers['Last-Event-ID'] = _lastEventId
 
   const resp = await fetch(`${API_URL}/api/v2/agent/stream`, { headers })
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  if (!resp.ok) {
+    // 게이트웨이는 동시 스트림 한도초과를 «상태코드»로 알린다 — per-key=429, global=503
+    // (agent_gateway.py). 429 는 `Retry-After` 헤더 + `{error:{code,retry_after}}` 본문을
+    // 싣는다. 서버가 준 retry_after 를 backoff 하한으로 삼아, 흔적만 남기고 슬롯을 계속
+    // 되무는 재연결 대신 서버 계약대로 물러선다(throw → _runStream 지수 backoff).
+    let retryAfter = Number(resp.headers.get('retry-after')) || 0
+    let code = `HTTP ${resp.status}`
+    try {
+      const j = (await resp.json()) as { error?: { code?: string; retry_after?: number } }
+      if (j?.error?.code) code = j.error.code
+      if (retryAfter <= 0) {
+        const ra = Number(j?.error?.retry_after)
+        if (Number.isFinite(ra) && ra > 0) retryAfter = ra
+      }
+    } catch {}
+    if (retryAfter > 0) _reconnectDelay = Math.max(_reconnectDelay, retryAfter * 1000)
+    process.stderr.write(`[sprintable] stream refused: ${code} (HTTP ${resp.status}) — backoff ${_reconnectDelay}ms\n`)
+    throw new Error(`stream refused: ${code} (HTTP ${resp.status})`)
+  }
   if (!resp.body) throw new Error('no response body')
 
-  process.stderr.write('[fakechat] SSE stream open\n')
+  process.stderr.write('[sprintable] SSE stream open\n')
   _reconnectDelay = 2000 // 성공 시 backoff 리셋
 
   const reader = resp.body.getReader()
@@ -326,16 +371,16 @@ async function _consumeStream(): Promise<void> {
       }
     }
   }
-  process.stderr.write('[fakechat] SSE stream closed\n')
+  process.stderr.write('[sprintable] SSE stream closed\n')
 }
 
 async function _runStream(): Promise<void> {
   if (HAS_WEBHOOK) {
-    process.stderr.write('[fakechat] webhook configured — SSE off\n')
+    process.stderr.write('[sprintable] webhook configured — SSE off\n')
     return
   }
   if (!API_KEY) {
-    process.stderr.write('[fakechat] SPRINTABLE_API_KEY / AGENT_API_KEY not set — SSE disabled\n')
+    process.stderr.write('[sprintable] SPRINTABLE_API_KEY / AGENT_API_KEY not set — SSE disabled\n')
     return
   }
 
@@ -344,10 +389,10 @@ async function _runStream(): Promise<void> {
     try {
       await _consumeStream()
     } catch (e) {
-      process.stderr.write(`[fakechat] stream error: ${e}\n`)
+      process.stderr.write(`[sprintable] stream error: ${e}\n`)
     }
     if (Date.now() - start >= 60_000) _reconnectDelay = 2000
-    process.stderr.write(`[fakechat] reconnecting in ${_reconnectDelay}ms\n`)
+    process.stderr.write(`[sprintable] reconnecting in ${_reconnectDelay}ms\n`)
     await Bun.sleep(_reconnectDelay)
     _reconnectDelay = Math.min(_reconnectDelay * 2, 60_000)
   }

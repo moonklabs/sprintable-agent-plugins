@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "moonklabs",
+  "description": "Moonklabs channel plugins for Claude Code — connect Claude Code sessions to Sprintable.",
+  "owner": { "name": "moonklabs", "email": "dev1@moonklabs.com" },
+  "plugins": [
+    {
+      "name": "sprintable",
+      "source": "./plugins/sprintable",
+      "description": "Sprintable channel for Claude Code — real-time Agent Gateway events + reply.",
+      "category": "development"
+    }
+  ]
+}
