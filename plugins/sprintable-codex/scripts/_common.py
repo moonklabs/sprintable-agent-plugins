@@ -116,6 +116,56 @@ def get_active_conversation(cwd: str | None) -> str | None:
         return None
 
 
+def set_current_session(cwd: str | None, session_id: str, project_cwd: str | None) -> None:
+    """A-1(#2567) idle-wake: 리스너가 「깨울 대상」을 알아야 하는데, 리스너 자체는
+    한 번 뜨면 오래 살아서 spawn 시점의 session_id를 그대로 쓰면 안 됨(그 세션은 이미
+    끝났을 수 있음) — SessionStart가 매번(재사용 spawn 포함) 이 파일을 갱신해, 리스너는
+    "가장 최근 세션"을 항상 fresh하게 읽는다."""
+    (_state_dir(cwd) / "current_session.json").write_text(
+        json.dumps({"session_id": session_id, "cwd": project_cwd, "updated_at": time.time()})
+    )
+
+
+def get_current_session(cwd: str | None) -> dict | None:
+    f = _state_dir(cwd) / "current_session.json"
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def reply_health_summary(cwd: str | None, window_seconds: float = 86400) -> dict:
+    """최근 window_seconds 내 replied/reply_failed 집계 — A-3(#2567): 회신 실패가
+    조용히 묻히지 않고 configure 상태 확인 시 보이게. 실패 예외를 events.jsonl에 남기는
+    것과 별개로, 이 함수가 그 로그를 사람이 바로 읽을 요약으로 뒤집는다."""
+    events_file = _state_dir(cwd) / "events.jsonl"
+    summary = {"window_seconds": window_seconds, "replied": 0, "failed": 0, "last_failure": None}
+    if not events_file.exists():
+        return summary
+    cutoff = time.time() - window_seconds
+    try:
+        for line in events_file.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("ts", 0) < cutoff:
+                continue
+            if rec.get("kind") == "replied":
+                summary["replied"] += 1
+            elif rec.get("kind") == "reply_failed":
+                summary["failed"] += 1
+                summary["last_failure"] = {
+                    "ts": rec.get("ts"), "conversation_id": rec.get("conversation_id"),
+                    "error": rec.get("error"),
+                }
+    except OSError:
+        pass
+    return summary
+
+
 def post_reply(cwd: str | None, conversation_id: str, text: str) -> bool:
     """실패해도 예외를 던지지 않는다 — AC2(세션 안 깨뜨림). 성공 여부만 반환."""
     creds = load_credentials(cwd)

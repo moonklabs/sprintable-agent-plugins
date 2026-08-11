@@ -15,7 +15,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 from _credentials import load_credentials  # noqa: E402
-from _common import _state_dir, log_event  # noqa: E402
+from _common import _state_dir, log_event, set_current_session  # noqa: E402
 
 
 def _pid_alive(pid: int) -> bool:
@@ -59,7 +59,10 @@ def main() -> None:
     cwd = payload.get("cwd")
     creds = load_credentials(cwd)
     if creds.get("SPRINTABLE_API_KEY"):
-        log_event(cwd, "session_start", session_id=payload.get("session_id"), source=payload.get("source"))
+        session_id = payload.get("session_id")
+        log_event(cwd, "session_start", session_id=session_id, source=payload.get("source"))
+        if session_id:
+            set_current_session(cwd, session_id, cwd)
         ensure_listener_running(cwd)
     print(json.dumps({}))
 

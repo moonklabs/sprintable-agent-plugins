@@ -51,3 +51,13 @@ Resolve the path per the order above, report whether a key is set (masked) and
 which tier resolved it (override / project-local / CODEX_HOME default) — this
 tells the user WHY they're isolated or shared without them having to know the
 resolution order by heart.
+
+**Also report reply health** (A-3, #2567 — reply failures are silent in the
+channel itself by design, AC2's safe-no-op, so this status check is the only
+place a misconfigured backend URL or a revoked key surfaces): the scripts
+directory is two levels up from this `SKILL.md` (`.../skills/configure/
+SKILL.md` → `.../scripts/`) — run `python3 <that>/scripts/reply_health.py
+--cwd <cwd>` and report the JSON it prints — `failed` count and, if nonzero,
+the `last_failure` error and which conversation it was for. Zero failures
+needs no extra line; nonzero should be visible, not buried at the end of a
+long status message.
