@@ -8,6 +8,7 @@ S1 스파이크(#2556) 실측 위에서 프로덕션화. 스파이크 대비 바
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -116,12 +117,113 @@ def get_active_conversation(cwd: str | None) -> str | None:
         return None
 
 
-def post_reply(cwd: str | None, conversation_id: str, text: str) -> bool:
-    """실패해도 예외를 던지지 않는다 — AC2(세션 안 깨뜨림). 성공 여부만 반환."""
+def set_current_session(cwd: str | None, session_id: str, project_cwd: str | None) -> None:
+    """A-1(#2567) idle-wake: 리스너가 「깨울 대상」을 알아야 하는데, 리스너 자체는
+    한 번 뜨면 오래 살아서 spawn 시점의 session_id를 그대로 쓰면 안 됨(그 세션은 이미
+    끝났을 수 있음) — SessionStart가 매번(재사용 spawn 포함) 이 파일을 갱신해, 리스너는
+    "가장 최근 세션"을 항상 fresh하게 읽는다."""
+    (_state_dir(cwd) / "current_session.json").write_text(
+        json.dumps({"session_id": session_id, "cwd": project_cwd, "updated_at": time.time()})
+    )
+
+
+def get_current_session(cwd: str | None) -> dict | None:
+    f = _state_dir(cwd) / "current_session.json"
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def reply_health_summary(cwd: str | None, window_seconds: float = 86400) -> dict:
+    """최근 window_seconds 내 replied/reply_failed 집계 — A-3(#2567): 회신 실패가
+    조용히 묻히지 않고 configure 상태 확인 시 보이게. 실패 예외를 events.jsonl에 남기는
+    것과 별개로, 이 함수가 그 로그를 사람이 바로 읽을 요약으로 뒤집는다."""
+    events_file = _state_dir(cwd) / "events.jsonl"
+    summary = {"window_seconds": window_seconds, "replied": 0, "failed": 0, "last_failure": None}
+    if not events_file.exists():
+        return summary
+    cutoff = time.time() - window_seconds
+    try:
+        for line in events_file.read_text().splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("ts", 0) < cutoff:
+                continue
+            if rec.get("kind") == "replied":
+                summary["replied"] += 1
+            elif rec.get("kind") == "reply_failed":
+                summary["failed"] += 1
+                summary["last_failure"] = {
+                    "ts": rec.get("ts"), "conversation_id": rec.get("conversation_id"),
+                    "error": rec.get("error"),
+                }
+    except OSError:
+        pass
+    return summary
+
+
+def _claim_reply_once(cwd: str | None, session_id: str | None, text: str) -> bool:
+    """(session_id, text) 조합이 처음이면 True(회신 진행), 이미 처리됐으면 False(스킵).
+    이중발화 내성 — A-1(#2567) 리뷰 지적: wake의 post_reply 직호출과 그 resume turn
+    자체의 Stop hook이 (실측상 resume은 Stop을 재발화 안 하지만, 그건 관측이지 구조적
+    보장이 아니다) 혹시라도 같은 last_assistant_message에 반응해도 회신은 정확히 1회만
+    나가도록 UNIQUE 제약으로 원자 보장 — grok 플러그인의 동일 가드와 같은 설계."""
+    conn = _conn(cwd)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS replied ("
+            "session_id TEXT NOT NULL, content_hash TEXT NOT NULL, "
+            "created_at REAL NOT NULL, UNIQUE(session_id, content_hash))"
+        )
+        content_hash = hashlib.sha256(text.encode()).hexdigest()
+        try:
+            conn.execute(
+                "INSERT INTO replied (session_id, content_hash, created_at) VALUES (?, ?, ?)",
+                (session_id or "", content_hash, time.time()),
+            )
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+    finally:
+        conn.close()
+
+
+def _release_claim(cwd: str | None, session_id: str | None, text: str) -> None:
+    """POST 실패가 확定되면 클레임을 즉시 해제 — 카디르 QA 지적(#2567 PR#7): 선점을
+    POST 성공 전에 커밋하므로, 실패해도 해제 안 하면 «클레임 성공→POST 실패→재시도가
+    영구 dedup에 막힘» 무음유실이 남는다. 선점 자체는 유지(POST 전으로 옮기면 listener와
+    Stop이 동시에 같은 텍스트를 노려 이중게시 race가 다시 열림 — 그건 원래 방지 대상)."""
+    conn = _conn(cwd)
+    try:
+        content_hash = hashlib.sha256(text.encode()).hexdigest()
+        conn.execute(
+            "DELETE FROM replied WHERE session_id = ? AND content_hash = ?",
+            (session_id or "", content_hash),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def post_reply(cwd: str | None, conversation_id: str, text: str, session_id: str | None = None) -> str:
+    """반환값 3종: "sent"(게시 성공) | "duplicate"(이미 게시됨·재시도 불필요) |
+    "failed"(게시 실패·재시도 필요 — 클레임도 해제해둠). 실패해도 예외는 안 던진다
+    (AC2: 세션 안 깨뜨림)."""
+    if session_id is not None and not _claim_reply_once(cwd, session_id, text):
+        log_event(cwd, "reply_deduped", session_id=session_id)
+        return "duplicate"
     creds = load_credentials(cwd)
     api_key = creds.get("SPRINTABLE_API_KEY")
     if not api_key:
-        return False
+        if session_id is not None:
+            _release_claim(cwd, session_id, text)
+        return "failed"
     api_url = creds.get("SPRINTABLE_API_URL", "https://app.sprintable.ai")
     url = f"{api_url.rstrip('/')}/api/v2/conversations/{conversation_id}/messages"
     req = urllib.request.Request(
@@ -133,7 +235,9 @@ def post_reply(cwd: str | None, conversation_id: str, text: str) -> bool:
         with urllib.request.urlopen(req, timeout=15) as resp:
             resp.read()
         log_event(cwd, "replied", conversation_id=conversation_id, text=text[:200])
-        return True
+        return "sent"
     except Exception as exc:
         log_event(cwd, "reply_failed", conversation_id=conversation_id, error=str(exc))
-        return False
+        if session_id is not None:
+            _release_claim(cwd, session_id, text)
+        return "failed"
