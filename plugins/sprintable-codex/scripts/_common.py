@@ -8,6 +8,7 @@ S1 스파이크(#2556) 실측 위에서 프로덕션화. 스파이크 대비 바
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -166,8 +167,39 @@ def reply_health_summary(cwd: str | None, window_seconds: float = 86400) -> dict
     return summary
 
 
-def post_reply(cwd: str | None, conversation_id: str, text: str) -> bool:
-    """실패해도 예외를 던지지 않는다 — AC2(세션 안 깨뜨림). 성공 여부만 반환."""
+def _claim_reply_once(cwd: str | None, session_id: str | None, text: str) -> bool:
+    """(session_id, text) 조합이 처음이면 True(회신 진행), 이미 처리됐으면 False(스킵).
+    이중발화 내성 — A-1(#2567) 리뷰 지적: wake의 post_reply 직호출과 그 resume turn
+    자체의 Stop hook이 (실측상 resume은 Stop을 재발화 안 하지만, 그건 관측이지 구조적
+    보장이 아니다) 혹시라도 같은 last_assistant_message에 반응해도 회신은 정확히 1회만
+    나가도록 UNIQUE 제약으로 원자 보장 — grok 플러그인의 동일 가드와 같은 설계."""
+    conn = _conn(cwd)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS replied ("
+            "session_id TEXT NOT NULL, content_hash TEXT NOT NULL, "
+            "created_at REAL NOT NULL, UNIQUE(session_id, content_hash))"
+        )
+        content_hash = hashlib.sha256(text.encode()).hexdigest()
+        try:
+            conn.execute(
+                "INSERT INTO replied (session_id, content_hash, created_at) VALUES (?, ?, ?)",
+                (session_id or "", content_hash, time.time()),
+            )
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+    finally:
+        conn.close()
+
+
+def post_reply(cwd: str | None, conversation_id: str, text: str, session_id: str | None = None) -> bool:
+    """실패해도 예외를 던지지 않는다 — AC2(세션 안 깨뜨림). 성공 여부만 반환.
+    session_id가 주어지면 (session_id, text) 중복 회신을 원자적으로 걸러낸다."""
+    if session_id is not None and not _claim_reply_once(cwd, session_id, text):
+        log_event(cwd, "reply_deduped", session_id=session_id)
+        return False
     creds = load_credentials(cwd)
     api_key = creds.get("SPRINTABLE_API_KEY")
     if not api_key:

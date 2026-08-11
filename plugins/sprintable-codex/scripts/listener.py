@@ -92,7 +92,7 @@ async def _attempt_wake(cwd: str | None) -> None:
                 reply_text = Path(last_msg_path).read_text().strip()
             except OSError:
                 reply_text = ""
-            if reply_text and post_reply(cwd, item["conversation_id"], reply_text):
+            if reply_text and post_reply(cwd, item["conversation_id"], reply_text, session_id=session_id):
                 log_event(cwd, "wake_succeeded", session_id=session_id, row_id=item["id"])
             else:
                 enqueue(cwd, item["content"], item["conversation_id"])

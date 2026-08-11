@@ -37,7 +37,7 @@ def main() -> None:
     if last_msg:
         target = get_active_conversation(cwd)
         if target:
-            post_reply(cwd, target, last_msg)
+            post_reply(cwd, target, last_msg, session_id=session_id)
 
     # 큐에 쌓인 것 전부 하나의 reason으로 합쳐 주입 — draining 1건씩 하지 않음(S1 AC3 판정).
     items = []
