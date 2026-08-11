@@ -202,6 +202,9 @@ async function requestApproval(
   }
   const replyUrl = `${API_URL}/api/v2/conversations/${conversationId}/messages`
   const inputSummary = JSON.stringify(toolInput).slice(0, 500)
+  // #2572: FE가 이 텍스트를 content-sniffing해 웹 카드로 렌더한다(플러그인 변경 0 제약의
+  // 귀결) — 이 포맷("🔒 승인 요청:" 헤더 · "allow"/"deny <사유>" 응답 규약)이 사실상 FE
+  // 계약이 됐다. 바꾸려면 FE와 함께.
   const promptText =
     `🔒 승인 요청: \`${toolName}\`\n입력: ${inputSummary}\n\n` +
     `「allow」 또는 「deny <사유>」로 답해주세요 (${HITL_TIMEOUT_MS / 1000}초 내 무응답 시 자동 거부).`
