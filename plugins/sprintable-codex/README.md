@@ -46,7 +46,10 @@ authenticated too; the channel (hooks) works independently of this.
   messages into one `{"decision":"block","reason":...}` and Codex processes them
   as a new turn — no human input required. The same `Stop` hook posts
   `last_assistant_message` back via `POST /api/v2/conversations/{id}/messages`.
-- **Tool**: hosted MCP at `https://mcp.sprintable.ai/mcp` — no local `stdio`
+- **Tool**: hosted MCP at `https://mcp.sprintable.ai/mcp` (server key
+  `sprintable-mcp` in `.mcp.json` — renamed from `sprintable` in #2577 to
+  avoid colliding with the Claude Code plugin's bundled channel MCP, which is
+  a separate server also historically named `sprintable`) — no local `stdio`
   process, no clone required.
 - Credentials unset → every hook is a safe no-op (`{}`), channel just stays
   inactive. Existing Codex users see zero behavior change until configured.
