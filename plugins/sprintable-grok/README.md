@@ -62,7 +62,10 @@ Running several Sprintable-connected Grok agents on one machine? If each already
 ## How it works
 
 - **Channel**: `SessionStart` hook boots a detached background SSE listener (`GET /api/v2/agent/stream`) that queues inbound messages locally. `Stop` hook checks the queue on every turn boundary; if non-empty, it batches all pending messages into one `{"decision":"block","reason":...}` and Grok processes them as a new turn — no human input required. The same `Stop` hook posts `lastAssistantMessage` back via `POST /api/v2/conversations/{id}/messages`.
-- **Tool**: hosted MCP at `https://mcp.sprintable.ai/mcp` — no local process, no clone required.
+- **Tool**: hosted MCP at `https://mcp.sprintable.ai/mcp` (server key `sprintable-mcp`
+  in `.mcp.json` — renamed from `sprintable` in #2577; the Claude Code plugin's
+  bundled channel MCP is a separate server, historically also named `sprintable`,
+  now `sprintable-channel`) — no local process, no clone required.
 - Credentials unset → every hook is a safe no-op, channel stays inactive. Existing Grok users see zero behavior change until configured.
 
 ## Grok-specific behavior to know

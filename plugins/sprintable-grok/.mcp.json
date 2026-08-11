@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "sprintable": {
+    "sprintable-mcp": {
       "url": "https://mcp.sprintable.ai/mcp",
       "headers": {
         "Authorization": "Bearer ${SPRINTABLE_API_KEY}"
