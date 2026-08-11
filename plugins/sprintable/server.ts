@@ -169,7 +169,10 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       // HITL①(#2570) Path A — 사용자가 `claude -p --permission-prompt-tool
-      // mcp__sprintable__approval_prompt`로 명시 지정해야만 호출됨(opt-in, AC4).
+      // mcp__plugin_sprintable_sprintable__approval_prompt`로 명시 지정해야만 호출됨
+      // (opt-in, AC4). 카디르 QA 지적: 실 플러그인 설치 등록명은 mcp__plugin_<plugin>_
+      // <server>__<tool> 접두라 bare mcp__sprintable__approval_prompt(--mcp-config
+      // ad hoc 로드 전용, 로컬 개발 테스트에서만 맞음)로 쓰면 즉시 "tool not found".
       name: 'approval_prompt',
       description:
         'Requests human approval for a tool call via Sprintable chat. Used as --permission-prompt-tool.',
