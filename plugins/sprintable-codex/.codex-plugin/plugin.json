@@ -1,0 +1,18 @@
+{
+  "name": "sprintable-codex",
+  "version": "0.1.0",
+  "description": "Sprintable channel + tools for Codex CLI — real-time Agent Gateway events via hooks, hosted MCP for tools.",
+  "author": { "name": "moonklabs" },
+  "homepage": "https://sprintable.ai",
+  "keywords": ["sprintable", "channel", "team", "sse"],
+  "hooks": "./hooks.json",
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Sprintable",
+    "shortDescription": "Connect Codex to your Sprintable team in real time",
+    "developerName": "moonklabs",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read"]
+  }
+}

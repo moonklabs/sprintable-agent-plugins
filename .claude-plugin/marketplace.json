@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "moonklabs",
-  "description": "Moonklabs channel plugins for Claude Code — connect Claude Code sessions to Sprintable.",
+  "description": "Moonklabs channel plugins for Claude Code — connect Claude Code sessions to Sprintable. (Codex CLI plugin lives in the same repo under plugins/sprintable-codex, installed via `codex plugin marketplace add` — see .agents/plugins/marketplace.json.)",
   "owner": { "name": "moonklabs", "email": "dev1@moonklabs.com" },
   "plugins": [
     {
