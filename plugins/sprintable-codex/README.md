@@ -19,6 +19,9 @@ Approve the hook trust prompt once on first run. Then configure your key (see be
 /sprintable:configure <agent_api_key> [api_url]
 ```
 
+`api_url` is optional — omit it to use the SaaS backend (`https://app.sprintable.ai`);
+pass it to point at dev or a self-hosted backend instead.
+
 Writes the key to this agent's Sprintable state dir, resolved in order:
 
 1. `$SPRINTABLE_STATE_DIR/.env` — if set, **authoritative**, no fallback.

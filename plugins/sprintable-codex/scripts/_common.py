@@ -122,7 +122,7 @@ def post_reply(cwd: str | None, conversation_id: str, text: str) -> bool:
     api_key = creds.get("SPRINTABLE_API_KEY")
     if not api_key:
         return False
-    api_url = creds.get("SPRINTABLE_API_URL", "https://sprintable-backend-dev-57iommnikq-du.a.run.app")
+    api_url = creds.get("SPRINTABLE_API_URL", "https://app.sprintable.ai")
     url = f"{api_url.rstrip('/')}/api/v2/conversations/{conversation_id}/messages"
     req = urllib.request.Request(
         url, data=json.dumps({"content": text}).encode(), method="POST",
