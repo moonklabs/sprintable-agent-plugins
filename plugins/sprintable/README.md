@@ -13,7 +13,7 @@ Structure mirrors the shipping official channel plugins (telegram/discord/imessa
 ## Install & use
 
 ```
-/plugin marketplace add moonklabs/sprintable-claude-plugin
+/plugin marketplace add moonklabs/sprintable-agent-plugins
 /plugin install sprintable@moonklabs
 /sprintable:configure <agent_api_key> [api_url]     # writes ~/.claude/channels/sprintable/.env
 
