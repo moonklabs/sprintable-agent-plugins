@@ -17,9 +17,9 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isInjectableEventType } from './inject-allowlist'
-import { readFileSync, chmodSync } from 'fs'
+import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, dirname } from 'path'
 
 // Load the agent credentials into process.env (real env wins).
 // Plugin-spawned servers get no env block — this is where the API key lives when
@@ -71,6 +71,45 @@ try {
     if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2]
   }
 } catch {}
+
+// ── HITL① (#2570): permission 승인을 Sprintable 챗으로 ────────────────────────
+// STATE_DIR = ENV_FILE의 부모 디렉터리 — 이미 격리 결정된 그 자리를 그대로 재사용해
+// events.jsonl(감사 로그, AC3)과 current_conversation.json(Path B 훅 프로세스가 이
+// MCP 서버와 같은 "지금 대화 중인 conv"를 읽을 수 있게 — 서로 다른 프로세스라 in-memory
+// 공유 불가, 파일로 넘긴다)을 둔다.
+const STATE_DIR = dirname(ENV_FILE)
+function logEvent(kind: string, fields: Record<string, unknown> = {}): void {
+  try {
+    mkdirSync(STATE_DIR, { recursive: true })
+    appendFileSync(
+      join(STATE_DIR, 'events.jsonl'),
+      JSON.stringify({ ts: Date.now() / 1000, kind, ...fields }) + '\n',
+    )
+  } catch {}
+}
+function persistCurrentConversation(conversationId: string): void {
+  try {
+    mkdirSync(STATE_DIR, { recursive: true })
+    writeFileSync(
+      join(STATE_DIR, 'current_conversation.json'),
+      JSON.stringify({ conversation_id: conversationId, updated_at: Date.now() / 1000 }),
+    )
+  } catch {}
+}
+// AC4: 기본 OFF. --permission-prompt-tool은 사용자가 claude 실행 시 명시적으로 지정해야만
+// approval_prompt 툴이 호출되므로(안 지정하면 이 툴은 존재만 하고 절대 안 불림) 이 자체가
+// opt-in이다 — Path A는 별도 게이트 불필요. Path B(훅)는 hooks.json이 매 세션 자동 로드되므로
+// 훅 스크립트 자신이 이 값을 확認해야(별도 hitl_approval_hook.ts 참조).
+const HITL_HOME_CHANNEL = process.env.SPRINTABLE_HITL_HOME_CHANNEL ?? ''
+const HITL_APPROVERS = (process.env.SPRINTABLE_HITL_APPROVERS ?? '')
+  .split(',').map((s: string) => s.trim()).filter(Boolean) // 빈 배열 = 전체 human 허용
+const HITL_TIMEOUT_MS = Number(process.env.SPRINTABLE_HITL_TIMEOUT_MS) || 600_000 // AC2: 600s 상한(기본)
+
+type PendingApproval = {
+  resolve: (decision: { behavior: 'allow' | 'deny'; message?: string }) => void
+  toolName: string
+}
+const pendingApprovals = new Map<string, PendingApproval>() // key: conversationId
 
 const API_URL = (
   process.env.SPRINTABLE_API_URL ?? 'https://app.sprintable.ai'
@@ -128,8 +167,80 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['message_id', 'text'],
       },
     },
+    {
+      // HITL①(#2570) Path A — 사용자가 `claude -p --permission-prompt-tool
+      // mcp__sprintable__approval_prompt`로 명시 지정해야만 호출됨(opt-in, AC4).
+      name: 'approval_prompt',
+      description:
+        'Requests human approval for a tool call via Sprintable chat. Used as --permission-prompt-tool.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tool_name: { type: 'string' },
+          input: { type: 'object' },
+          tool_use_id: { type: 'string' },
+        },
+        required: ['tool_name', 'input'],
+      },
+    },
   ],
 }))
+
+// HITL①(#2570): 승인요청 게시 + 챗 답 대기(최대 HITL_TIMEOUT_MS). 대상 conv 해석 —
+// active_conversation(latestInboundMeta, PO 확定 설계) → 없으면 HOME_CHANNEL 폴백.
+async function requestApproval(
+  toolName: string,
+  toolInput: unknown,
+): Promise<{ behavior: 'allow' | 'deny'; message?: string }> {
+  const conversationId = latestInboundMeta?.threadId || HITL_HOME_CHANNEL
+  if (!conversationId) {
+    logEvent('hitl_no_target', { tool_name: toolName })
+    return { behavior: 'deny', message: '승인 요청 게시 대상 대화를 찾을 수 없음(안전 거부)' }
+  }
+  const replyUrl = `${API_URL}/api/v2/conversations/${conversationId}/messages`
+  const inputSummary = JSON.stringify(toolInput).slice(0, 500)
+  const promptText =
+    `🔒 승인 요청: \`${toolName}\`\n입력: ${inputSummary}\n\n` +
+    `「allow」 또는 「deny <사유>」로 답해주세요 (${HITL_TIMEOUT_MS / 1000}초 내 무응답 시 자동 거부).`
+
+  try {
+    const resp = await fetch(replyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${API_KEY}`,
+        'x-agent-api-key': API_KEY,
+      },
+      body: JSON.stringify({ content: promptText }),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  } catch (e) {
+    logEvent('hitl_post_failed', { tool_name: toolName, conversation_id: conversationId, error: String(e) })
+    return { behavior: 'deny', message: `승인 요청 게시 실패(안전 거부): ${e}` }
+  }
+  logEvent('hitl_requested', { tool_name: toolName, conversation_id: conversationId, input: inputSummary })
+
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingApprovals.delete(conversationId)
+      logEvent('hitl_timeout', { tool_name: toolName, conversation_id: conversationId })
+      // #2570 Ortega 지시: 타임아웃 message는 "거부"와 "무응답"을 모델이 구별할 수 있게
+      // 명시적으로 다르게 쓴다(그냥 "거부됨"이면 모델이 진짜 사람 거부와 구별 못 함).
+      resolve({ behavior: 'deny', message: '챗 승인 타임아웃(무응답) — 사람이 정해진 시간 내 응답하지 않았습니다.' })
+    }, HITL_TIMEOUT_MS)
+    pendingApprovals.set(conversationId, {
+      toolName,
+      resolve: decision => {
+        clearTimeout(timer)
+        pendingApprovals.delete(conversationId)
+        logEvent(decision.behavior === 'allow' ? 'hitl_approved' : 'hitl_denied', {
+          tool_name: toolName, conversation_id: conversationId, message: decision.message,
+        })
+        resolve(decision)
+      },
+    })
+  })
+}
 
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
@@ -154,6 +265,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'edit_message': {
         // no WS anymore — best-effort via REST if endpoint exists
         return { content: [{ type: 'text', text: 'ok (edit not supported in SSE mode)' }] }
+      }
+      case 'approval_prompt': {
+        // Claude Code가 --permission-prompt-tool로 이 도구를 부를 때 기대하는 반환 계약은
+        // {behavior:"allow"|"deny", updatedInput?, message?} — 실측 확認(#2570 spike,
+        // 실 MCP 서버 왕복: allow+updatedInput→write 통과, deny+message→모델에 그대로 전달).
+        const toolName = String(args.tool_name ?? '')
+        const toolInput = args.input ?? {}
+        const decision = await requestApproval(toolName, toolInput)
+        const behaviorPayload =
+          decision.behavior === 'allow'
+            ? { behavior: 'allow', updatedInput: toolInput }
+            : { behavior: 'deny', message: decision.message ?? '거부됨' }
+        return { content: [{ type: 'text', text: JSON.stringify(behaviorPayload) }] }
       }
       default:
         return {
@@ -320,6 +444,35 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
       ? payload.sender
       : {}) as Record<string, unknown>
   const senderName = String(sender.name ?? data.sender_id ?? 'sprintable')
+  const senderType = String(sender.type ?? '')
+  const senderId = String(sender.id ?? '')
+
+  if (conversationId) persistCurrentConversation(conversationId)
+
+  // HITL①(#2570): 이 conv에 대기 중인 승인요청이 있으면 allow/deny 답인지 먼저 본다.
+  // 권위 가드(Ortega 확定) — sender.type==="human"만 유효. 에이전트 발신 allow/deny는
+  // "답을 사칭"할 수 있어(다른 에이전트가 팀 conv에서 대신 승인) 무시+로그만 남기고 정상
+  // deliver()로 흘려보낸다(먹통 아님 — 그냥 승인 결정으로는 안 씀). 선택적 승인자
+  // whitelist(SPRINTABLE_HITL_APPROVERS)도 같은 원칙: 비어있으면 human 전체 허용.
+  const pending = conversationId ? pendingApprovals.get(conversationId) : undefined
+  if (pending) {
+    const m = content.match(/^\s*(allow|deny)\b\s*(.*)$/i)
+    if (m) {
+      const isHuman = senderType === 'human'
+      const isApprover = HITL_APPROVERS.length === 0 || HITL_APPROVERS.includes(senderId)
+      if (isHuman && isApprover) {
+        const decision = m[1].toLowerCase() === 'allow' ? 'allow' : 'deny'
+        pending.resolve({ behavior: decision, message: m[2]?.trim() || undefined })
+        if (seq > 0) await _sendAck(seq)
+        return // 승인 답 자체는 일반 채널 메시지로 재주입 안 함 — 모델이 이미 도구 응답으로 받음
+      }
+      logEvent('hitl_reply_rejected', {
+        conversation_id: conversationId, sender_type: senderType, sender_id: senderId,
+        reason: !isHuman ? 'not_human' : 'not_in_approver_whitelist',
+      })
+      // 사칭/권한밖 시도는 정상 deliver()로 흘려보낸다(아래로 계속) — 대기 상태는 안 풀림.
+    }
+  }
 
   const meta =
     conversationId
