@@ -48,7 +48,7 @@ async def main(cwd: str | None) -> None:
     if not api_key or not HTTPX_OK:
         log_event(cwd, "listener_disabled", reason="no_credentials" if not api_key else "no_httpx")
         return
-    api_url = creds.get("SPRINTABLE_API_URL", "https://sprintable-backend-dev-57iommnikq-du.a.run.app")
+    api_url = creds.get("SPRINTABLE_API_URL", "https://app.sprintable.ai")
     log_event(cwd, "listener_start", api_url=api_url)
     client = SprintableSSEClient(api_url=api_url, api_key=api_key)
     await client.run(lambda ctx: on_message(cwd, ctx))

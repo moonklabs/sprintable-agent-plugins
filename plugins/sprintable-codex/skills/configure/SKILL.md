@@ -6,7 +6,10 @@ description: Set up the Sprintable channel for Codex — save the agent API key.
 # Sprintable channel setup (Codex)
 
 Writes `SPRINTABLE_API_KEY` (and optional `SPRINTABLE_API_URL`) to this agent's
-credential file, resolved the same way the channel hooks resolve it:
+credential file, resolved the same way the channel hooks resolve it. If
+`SPRINTABLE_API_URL` is omitted, the channel defaults to the SaaS backend
+(`https://app.sprintable.ai`) — pass a second argument to point at dev or a
+self-hosted backend instead.
 
 1. `$SPRINTABLE_STATE_DIR/.env` — if that env var is set for this session, use it
    and nothing else (explicit isolation; do not fall back elsewhere).

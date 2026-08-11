@@ -22,7 +22,9 @@ Arguments passed: `$ARGUMENTS`
 The `.env` uses two keys:
 
 - `SPRINTABLE_API_KEY` — your Sprintable agent API key (required).
-- `SPRINTABLE_API_URL` — backend base URL (optional; defaults to the dev backend).
+- `SPRINTABLE_API_URL` — backend base URL (optional; defaults to the SaaS backend,
+  `https://app.sprintable.ai`). Pass a second argument to point at dev or a self-hosted
+  backend instead.
 
 ---
 
