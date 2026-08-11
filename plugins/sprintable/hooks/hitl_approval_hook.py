@@ -160,6 +160,9 @@ def main() -> None:
     approvers = [s.strip() for s in os.environ.get("SPRINTABLE_HITL_APPROVERS", "").split(",") if s.strip()]
 
     input_summary = json.dumps(tool_input, ensure_ascii=False)[:500]
+    # #2572: FE가 이 텍스트를 content-sniffing해 웹 카드로 렌더한다(플러그인 변경 0 제약의
+    # 귀결) — 이 포맷("🔒 승인 요청:" 헤더 · "allow"/"deny <사유>" 응답 규약)이 사실상 FE
+    # 계약이 됐다. server.ts의 동일 포맷과 반드시 함께 바꿀 것.
     prompt_text = (
         f"🔒 승인 요청: `{tool_name}`\n입력: {input_summary}\n\n"
         f"「allow」 또는 「deny <사유>」로 답해주세요 ({int(timeout_sec)}초 내 무응답 시 자동 거부)."
