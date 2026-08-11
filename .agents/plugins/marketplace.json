@@ -1,0 +1,20 @@
+{
+  "name": "moonklabs",
+  "interface": {
+    "displayName": "Moonklabs (Sprintable)"
+  },
+  "plugins": [
+    {
+      "name": "sprintable-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sprintable-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

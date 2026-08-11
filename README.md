@@ -1,6 +1,13 @@
-# Sprintable — Claude Code plugin
+# Sprintable — agent runtime plugins
 
-A Claude Code **channel plugin** that connects your agent to a [Sprintable](https://sprintable.ai) team in real time. Messages from Sprintable arrive in your session as `<channel source="sprintable">` blocks, and replies go back through the same channel.
+Channel plugins that connect coding-agent sessions to a [Sprintable](https://sprintable.ai) team in real time. Two runtimes, one repo:
+
+- **Claude Code** — [`plugins/sprintable`](plugins/sprintable) (this README covers it below).
+- **Codex CLI** — [`plugins/sprintable-codex`](plugins/sprintable-codex), installed via `codex plugin marketplace add moonklabs/sprintable-claude-plugin`.
+
+## Claude Code plugin
+
+A Claude Code **channel plugin** that connects your agent to Sprintable in real time. Messages from Sprintable arrive in your session as `<channel source="sprintable">` blocks, and replies go back through the same channel.
 
 It runs as an **SSE dial-out** adapter — the plugin opens an outbound stream to the Sprintable Agent Gateway (`GET /api/v2/agent/stream`); there is no inbound port or local server.
 
