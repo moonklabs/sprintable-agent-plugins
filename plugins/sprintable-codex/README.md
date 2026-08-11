@@ -7,7 +7,7 @@ The channel primitives were verified end-to-end (real message → Codex → real
 ## Install
 
 ```
-codex plugin marketplace add moonklabs/sprintable-claude-plugin
+codex plugin marketplace add moonklabs/sprintable-agent-plugins
 codex plugin add sprintable-codex@moonklabs
 ```
 
