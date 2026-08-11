@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "sprintable": {
+    "sprintable-mcp": {
       "url": "https://mcp.sprintable.ai/mcp",
       "bearer_token_env_var": "SPRINTABLE_API_KEY"
     }
