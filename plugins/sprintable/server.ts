@@ -21,11 +21,37 @@ import { readFileSync, chmodSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
-// Load ~/.claude/channels/sprintable/.env into process.env (real env wins).
+// Load the agent credentials into process.env (real env wins).
 // Plugin-spawned servers get no env block — this is where the API key lives when
 // set via /sprintable:configure. Launcher env injection still works as a fallback.
-const STATE_DIR = process.env.SPRINTABLE_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'sprintable')
-const ENV_FILE = join(STATE_DIR, '.env')
+//
+// ── Multi-agent isolation ────────────────────────────────────────────────────
+// A single homedir path (~/.claude/channels/sprintable/.env) is shared by every
+// Claude Code session on the machine, so onboarding two agents on one machine via
+// /sprintable:configure makes the last key overwrite the others. Claude Code does
+// NOT expose a session identifier symmetrically to skill and server — CLAUDE_PROJECT_DIR
+// reaches THIS server process but NOT the configure skill's Bash — so fully-automatic
+// per-agent isolation is not achievable at the plugin layer. The supported isolation
+// is an explicit override (SPRINTABLE_STATE_DIR per launch), the same mechanism the
+// fleet already uses. Read the credential from the first candidate that actually has
+// a .env, so existing homedir installs keep working (no regression):
+//   1) SPRINTABLE_STATE_DIR           explicit override — per-agent isolation
+//   2) $CLAUDE_PROJECT_DIR/.sprintable project-local (server sees CLAUDE_PROJECT_DIR)
+//   3) ~/.claude/channels/sprintable  legacy homedir path (fallback)
+const STATE_DIR_CANDIDATES = [
+  process.env.SPRINTABLE_STATE_DIR,
+  process.env.CLAUDE_PROJECT_DIR ? join(process.env.CLAUDE_PROJECT_DIR, '.sprintable') : undefined,
+  join(homedir(), '.claude', 'channels', 'sprintable'),
+].filter((d): d is string => Boolean(d))
+let ENV_FILE = join(STATE_DIR_CANDIDATES[STATE_DIR_CANDIDATES.length - 1], '.env')
+for (const dir of STATE_DIR_CANDIDATES) {
+  const candidate = join(dir, '.env')
+  try {
+    readFileSync(candidate, 'utf8') // exists?
+    ENV_FILE = candidate
+    break
+  } catch {}
+}
 try {
   chmodSync(ENV_FILE, 0o600) // credential — lock to owner
   for (const line of readFileSync(ENV_FILE, 'utf8').split('\n')) {
