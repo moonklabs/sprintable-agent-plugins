@@ -81,6 +81,25 @@ def queue_depth(cwd: str | None) -> int:
         conn.close()
 
 
+def get_seq_cursor(cwd: str | None) -> int:
+    """마지막으로 처리한 이벤트 seq(단조증가, 키당 전역). 재연결 backfill 판정 기준."""
+    f = _state_dir(cwd) / "seq_cursor.json"
+    if not f.exists():
+        return 0
+    try:
+        return int(json.loads(f.read_text()).get("seq", 0))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return 0
+
+
+def advance_seq_cursor(cwd: str | None, seq: int) -> None:
+    if seq <= 0:
+        return
+    current = get_seq_cursor(cwd)
+    if seq > current:
+        (_state_dir(cwd) / "seq_cursor.json").write_text(json.dumps({"seq": seq, "updated_at": time.time()}))
+
+
 def set_active_conversation(cwd: str | None, conversation_id: str) -> None:
     (_state_dir(cwd) / "active_conversation.json").write_text(
         json.dumps({"conversation_id": conversation_id, "updated_at": time.time()})

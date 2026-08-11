@@ -15,7 +15,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _credentials import load_credentials  # noqa: E402
-from _common import enqueue, set_active_conversation, log_event  # noqa: E402
+from _common import (  # noqa: E402
+    enqueue, set_active_conversation, log_event, get_seq_cursor, advance_seq_cursor,
+)
 
 try:
     from sprintable_sse import SprintableSSEClient, MessageContext  # noqa: E402
@@ -27,13 +29,17 @@ except ImportError:
 async def on_message(cwd: str | None, ctx) -> None:
     log_event(cwd, "sse_received", conversation_id=ctx.conversation_id, seq=ctx.seq,
               is_backfill=ctx.is_backfill)
-    if ctx.is_backfill:
-        # S1 부가관측: 재연결 backfill이 "진짜 새 메시지"를 오분류해 실어올 수 있음(#2556
-        # 판정문). seq 커서 기반 dedup은 후속 하드닝 — 지금은 안전한 쪽(중복 재주입 방지)으로
-        # blanket drop 유지, 유실 리스크는 알려진 갭으로 기록.
+
+    # seq-커서 dedup(PR#2 리뷰 반영, S1 부가관측 #2556): backfill을 통째로 drop하면 재연결
+    # 타이밍에 걸린 «진짜 새 메시지»가 조용히 유실된다(유실은 중복보다 나쁨 — 안 보임). 커서
+    # 이하(이미 처리한 seq)만 진짜 재전송으로 보고 drop, 커서 초과면 backfill 플래그가 붙어
+    # 있어도 "재연결 전에 놓친 새 이벤트"로 취급해 enqueue한다.
+    cursor = get_seq_cursor(cwd)
+    if ctx.is_backfill and (not ctx.seq or ctx.seq <= cursor):
         return
     enqueue(cwd, ctx.content, ctx.conversation_id)
     set_active_conversation(cwd, ctx.conversation_id)
+    advance_seq_cursor(cwd, ctx.seq)
 
 
 async def main(cwd: str | None) -> None:

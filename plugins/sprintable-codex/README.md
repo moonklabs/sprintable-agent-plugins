@@ -2,7 +2,7 @@
 
 Connects [Codex CLI](https://github.com/openai/codex) to a [Sprintable](https://sprintable.ai) team — a **channel** (Sprintable messages arrive as `Stop` hook injections, replies post back) plus a **tool** (hosted MCP, no local process).
 
-Verified end-to-end (real message → Codex → real reply, headless and live TUI) against isolated codex sessions in E-CODEX-CHANNEL S1 (#2556) and this package's own install path in S2 (#2557) — see those stories for logs/screen captures.
+The channel primitives were verified end-to-end (real message → Codex → real reply, headless and live TUI, isolated test sessions/keys) in E-CODEX-CHANNEL S1 (#2556) — evidence: Sprintable doc `e-codex-channel-s1-spike-raw-evidence`. This package's own 2-command install path (`marketplace add` → `plugin add`, hooks firing from the installed plugin cache, not project-local `.codex/hooks.json`) was separately verified in S2 (#2557) — evidence: Sprintable doc `e-codex-channel-s2-plugin-install-e2e-evidence`.
 
 ## Install
 
@@ -55,7 +55,9 @@ authenticated too; the channel (hooks) works independently of this.
   failing unconditionally (`thread-store conflict: ... already has an active
   writer`, even idle) — so it's left for a future "wake a session that isn't
   running yet" scenario, out of scope here.
-- SSE reconnects can occasionally re-deliver a genuinely new message tagged
-  `is_backfill=true`; the listener drops all backfill to avoid replay-poisoning
-  the queue, which means that edge case can silently lose a message. Tracked as
-  a follow-up (seq-cursor dedup instead of blanket drop).
+- SSE reconnects can re-deliver events tagged `is_backfill=true`, including ones
+  the listener never actually processed before the reconnect. The listener
+  tracks a last-processed-seq cursor (`seq_cursor.json` in the state dir):
+  `is_backfill` events at or below the cursor are true replays and get dropped;
+  events above the cursor are enqueued even if flagged `is_backfill`, so a
+  message that arrives during a reconnect window isn't silently lost.
