@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 ${GROK_PLUGIN_ROOT}/scripts/session_start.py" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 ${GROK_PLUGIN_ROOT}/scripts/user_prompt_submit.py" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 ${GROK_PLUGIN_ROOT}/scripts/stop.py", "timeout": 60 }
+        ]
+      }
+    ]
+  }
+}
