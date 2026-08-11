@@ -35,22 +35,34 @@ import { join } from 'path'
 // is an explicit override (SPRINTABLE_STATE_DIR per launch), the same mechanism the
 // fleet already uses. Read the credential from the first candidate that actually has
 // a .env, so existing homedir installs keep working (no regression):
-//   1) SPRINTABLE_STATE_DIR           explicit override — per-agent isolation
+//   1) SPRINTABLE_STATE_DIR           explicit override — AUTHORITATIVE, no fallback
 //   2) $CLAUDE_PROJECT_DIR/.sprintable project-local (server sees CLAUDE_PROJECT_DIR)
-//   3) ~/.claude/channels/sprintable  legacy homedir path (fallback)
-const STATE_DIR_CANDIDATES = [
-  process.env.SPRINTABLE_STATE_DIR,
-  process.env.CLAUDE_PROJECT_DIR ? join(process.env.CLAUDE_PROJECT_DIR, '.sprintable') : undefined,
-  join(homedir(), '.claude', 'channels', 'sprintable'),
-].filter((d): d is string => Boolean(d))
-let ENV_FILE = join(STATE_DIR_CANDIDATES[STATE_DIR_CANDIDATES.length - 1], '.env')
-for (const dir of STATE_DIR_CANDIDATES) {
-  const candidate = join(dir, '.env')
-  try {
-    readFileSync(candidate, 'utf8') // exists?
-    ENV_FILE = candidate
-    break
-  } catch {}
+//   3) ~/.claude/channels/sprintable  legacy homedir path
+//
+// SPRINTABLE_STATE_DIR is a deliberate isolation signal, so it is authoritative: if it
+// is set we read ONLY that path. If its .env does not exist yet (e.g. an agent launched
+// with the override but not yet /sprintable:configure'd), we leave credentials UNSET
+// rather than falling back to homedir — otherwise the isolated agent would read some
+// OTHER agent's key from the shared homedir on first boot (the exact cross-agent mixup
+// this fix exists to stop). Only the AUTOMATIC candidates (project-local, homedir) fall
+// through to "first candidate whose .env actually exists", keeping existing installs working.
+let ENV_FILE: string
+if (process.env.SPRINTABLE_STATE_DIR) {
+  ENV_FILE = join(process.env.SPRINTABLE_STATE_DIR, '.env')
+} else {
+  const AUTO_DIRS = [
+    process.env.CLAUDE_PROJECT_DIR ? join(process.env.CLAUDE_PROJECT_DIR, '.sprintable') : undefined,
+    join(homedir(), '.claude', 'channels', 'sprintable'),
+  ].filter((d): d is string => Boolean(d))
+  ENV_FILE = join(AUTO_DIRS[AUTO_DIRS.length - 1], '.env') // default: homedir
+  for (const dir of AUTO_DIRS) {
+    const candidate = join(dir, '.env')
+    try {
+      readFileSync(candidate, 'utf8') // exists?
+      ENV_FILE = candidate
+      break
+    } catch {}
+  }
 }
 try {
   chmodSync(ENV_FILE, 0o600) // credential — lock to owner

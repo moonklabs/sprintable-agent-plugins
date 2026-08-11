@@ -42,6 +42,8 @@ and give a complete picture:
      (or `--dangerously-load-development-channels plugin:sprintable@moonklabs` on a
      non-managed org). Events from your Sprintable conversations arrive in-session."*
 
+### `<agent_api_key> [api_url]` — save
+
 Target dir is `$SPRINTABLE_STATE_DIR` if that env var is set, otherwise
 `~/.claude/channels/sprintable` (call it `$DIR`). See **Multi-agent isolation** below.
 
@@ -59,6 +61,10 @@ Target dir is `$SPRINTABLE_STATE_DIR` if that env var is set, otherwise
    other keys. Write back, no quotes around the value.
 5. `chmod 600 "$DIR/.env"` — the key is a credential.
 6. Confirm (mask the key), then show the no-args status.
+
+### `clear` — remove
+
+Delete the `SPRINTABLE_API_KEY=` line (or the file if that's the only key).
 
 ## Multi-agent isolation
 
@@ -80,10 +86,6 @@ Then run `/sprintable:configure <key>` inside each session — it writes to that
 `$SPRINTABLE_STATE_DIR`, and the channel server reads the same path. (The server also
 falls back to `$CLAUDE_PROJECT_DIR/.sprintable/.env` when present.) Injecting the key via
 launch env (`AGENT_API_KEY`/`SPRINTABLE_API_KEY`) also isolates — real env wins over the file.
-
-### `clear` — remove
-
-Delete the `SPRINTABLE_API_KEY=` line (or the file if that's the only key).
 
 ---
 
