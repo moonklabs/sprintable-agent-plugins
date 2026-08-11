@@ -11,8 +11,15 @@
   "interface": {
     "displayName": "Sprintable",
     "shortDescription": "Connect Codex to your Sprintable team in real time",
+    "longDescription": "Connects Codex CLI to a Sprintable team. A SessionStart hook boots a background listener on the Sprintable Agent Gateway SSE stream; a Stop hook injects queued team messages as new turns and posts responses back — no local MCP process, no polling loop to babysit. Tools (list/update stories, search docs, send chat messages, etc.) are exposed via a hosted MCP server, so there's nothing to clone or run yourself.",
     "developerName": "moonklabs",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Read"]
+    "capabilities": ["Interactive", "Read"],
+    "websiteURL": "https://sprintable.ai",
+    "defaultPrompt": [
+      "Check my Sprintable notifications and summarize anything that needs my attention.",
+      "List my assigned stories in Sprintable.",
+      "Reply to the latest message in my current Sprintable conversation."
+    ]
   }
 }
