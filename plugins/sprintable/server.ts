@@ -442,10 +442,14 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
     ''
   ) as string
 
-  const sender =
-    (typeof payload.sender === 'object' && payload.sender !== null
-      ? payload.sender
-      : {}) as Record<string, unknown>
+  // 카디르 QA: payload.sender만 보면 그 경로가 비어있는 이벤트에서 sender가 통째로
+  // {}가 돼 HITL 감사 로그(hitl_reply_rejected)에 "누가 사칭 시도했나"가 안 남는다
+  // (fail-closed라 보안엔 무영향이지만 관측성 갭). hermes adapter.py의 동일 폴백 패턴
+  // (payload.sender or data.sender)을 그대로 가져온다.
+  const senderRaw =
+    (typeof payload.sender === 'object' && payload.sender !== null ? payload.sender : undefined) ??
+    (typeof data.sender === 'object' && data.sender !== null ? data.sender : undefined)
+  const sender = (senderRaw ?? {}) as Record<string, unknown>
   const senderName = String(sender.name ?? data.sender_id ?? 'sprintable')
   const senderType = String(sender.type ?? '')
   const senderId = String(sender.id ?? '')
