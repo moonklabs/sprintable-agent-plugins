@@ -92,12 +92,23 @@ async def _attempt_wake(cwd: str | None) -> None:
                 reply_text = Path(last_msg_path).read_text().strip()
             except OSError:
                 reply_text = ""
-            if reply_text and post_reply(cwd, item["conversation_id"], reply_text, session_id=session_id):
-                log_event(cwd, "wake_succeeded", session_id=session_id, row_id=item["id"])
-            else:
+            if not reply_text:
                 enqueue(cwd, item["content"], item["conversation_id"])
                 log_event(cwd, "wake_failed", session_id=session_id, row_id=item["id"],
-                           reason="empty_last_message" if not reply_text else "post_reply_failed")
+                           reason="empty_last_message")
+            else:
+                result = post_reply(cwd, item["conversation_id"], reply_text, session_id=session_id)
+                if result == "sent":
+                    log_event(cwd, "wake_succeeded", session_id=session_id, row_id=item["id"])
+                elif result == "duplicate":
+                    # 이미 다른 경로(예: 거의 동시의 Stop 배치드레인)가 같은 텍스트를
+                    # 게시했음 — 재큐잉하면 똑같은 내용을 무한 재시도하게 됨, 카디르
+                    # QA 지적 반영.
+                    log_event(cwd, "wake_deduped", session_id=session_id, row_id=item["id"])
+                else:
+                    enqueue(cwd, item["content"], item["conversation_id"])
+                    log_event(cwd, "wake_failed", session_id=session_id, row_id=item["id"],
+                               reason="post_reply_failed")
         else:
             enqueue(cwd, item["content"], item["conversation_id"])
             log_event(cwd, "wake_failed", session_id=session_id,
