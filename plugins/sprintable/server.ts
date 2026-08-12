@@ -17,6 +17,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isInjectableEventType } from './inject-allowlist'
+import { formatEnvelopeText } from './envelope'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, dirname } from 'path'
@@ -322,7 +323,14 @@ function deliver(
   id: string,
   text: string,
   file?: { path: string; name: string },
-  meta?: { thread_id?: string; reply_callback_url?: string; reply_callback_api_key?: string },
+  meta?: {
+    thread_id?: string
+    reply_callback_url?: string
+    reply_callback_api_key?: string
+    // story #2583 — 이 메타의 실제 발신자. 미지정이면 이전 동작 그대로 'sprintable'
+    // 폴백(다른 호출부가 생기더라도 무회귀).
+    user?: string
+  },
 ): void {
   if (meta?.thread_id && meta?.reply_callback_url && meta?.reply_callback_api_key) {
     const m: InboundMeta = {
@@ -341,7 +349,7 @@ function deliver(
       meta: {
         chat_id: meta?.thread_id ?? 'sprintable',
         message_id: id,
-        user: 'sprintable',
+        user: meta?.user ?? 'sprintable',
         ts: new Date().toISOString(),
         ...(file ? { file_path: file.path } : {}),
         ...(meta?.thread_id ? { thread_id: meta.thread_id } : {}),
@@ -460,6 +468,11 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
   const senderName = String(sender.name ?? data.sender_id ?? 'sprintable')
   const senderType = String(sender.type ?? '')
   const senderId = String(sender.id ?? '')
+  // story #2583 — 같은 방식(data 최상위 → payload fallback)으로 event_kind/ts도 뽑아
+  // 아래 deliver() 호출에서 envelope으로 렌더한다(inject-allowlist.ts의 event_type 추출과
+  // 동형 순서 — 두 곳이 다른 값으로 갈리면 안 되므로 같은 fallback 체인을 그대로 미러).
+  const eventKind = String(data.event_type ?? payload.event_type ?? '')
+  const ts = String(data.created_at ?? payload.created_at ?? '')
 
   if (conversationId) persistCurrentConversation(conversationId)
 
@@ -494,14 +507,20 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
           thread_id: conversationId,
           reply_callback_url: `${API_URL}/api/v2/conversations/${conversationId}/messages`,
           reply_callback_api_key: API_KEY,
+          user: senderName,
         }
-      : undefined
+      : { user: senderName }
 
   process.stderr.write(
     `[sprintable] inbound seq=${seq} conv=${conversationId} from=${senderName}: ${content.slice(0, 80)}\n`,
   )
 
-  deliver(eventId, content, undefined, meta)
+  // story #2583 — 발신자/이벤트종류/ts를 표준 envelope로 렌더해 실음(content만 넘기면
+  // 모델이 발신자를 모른 채 진행 — 댄 어윈 오호칭 사고와 동일 코드 경로였다).
+  const envelopeText = formatEnvelopeText({
+    content, senderName, senderId, senderType, eventKind, conversationId, ts,
+  })
+  deliver(eventId, envelopeText, undefined, meta)
 
   if (seq > 0) await _sendAck(seq)
 }
