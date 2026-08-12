@@ -18,6 +18,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { isInjectableEventType } from './inject-allowlist'
 import { formatEnvelopeText } from './envelope'
+import { currentConversationFilename } from './conversation-routing'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, dirname } from 'path'
@@ -91,8 +92,10 @@ function logEvent(kind: string, fields: Record<string, unknown> = {}): void {
 function persistCurrentConversation(conversationId: string): void {
   try {
     mkdirSync(STATE_DIR, { recursive: true })
+    // #2589: 파일명 자체를 CLAUDE_PROJECT_DIR로 분리 — STATE_DIR이 여러 워커에서
+    // 같은(공유 homedir 기본값) 경로로 떨어져도 이 파일만은 워커별로 갈린다.
     writeFileSync(
-      join(STATE_DIR, 'current_conversation.json'),
+      join(STATE_DIR, currentConversationFilename()),
       JSON.stringify({ conversation_id: conversationId, updated_at: Date.now() / 1000 }),
     )
   } catch {}

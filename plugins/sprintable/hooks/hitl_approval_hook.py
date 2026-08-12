@@ -54,9 +54,27 @@ def _log_event(kind: str, **fields) -> None:
         pass
 
 
+# story #2589 fix — 이 함수는 conversation-routing.ts의 conversationRoutingSuffix()와
+# **문자 단위로 동일**해야 한다(언어 경계 — import 불가). 서로 다른 두 프로세스(이 훅과
+# server.ts)가 아무 조정 없이 같은 파일명에 도달하려면 둘 다 CLAUDE_PROJECT_DIR을 정확히
+# 같은 규칙으로 치환해야 한다 — 해시가 아니라 단순 문자 치환인 이유는 그쪽 파일의 docstring
+# 참조. 이쪽이나 그쪽 정규식을 고치면 test_hitl_approval_hook.py의 핀 테스트가 즉시 깨진다.
+def _conversation_routing_suffix() -> str:
+    cwd = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if not cwd:
+        return ""
+    return "." + re.sub(r"[^a-zA-Z0-9_-]", "_", cwd)
+
+
+def _current_conversation_filename() -> str:
+    return f"current_conversation{_conversation_routing_suffix()}.json"
+
+
 def _target_conversation() -> str:
     # server.ts가 매 인바운드마다 갱신하는 파일 — Path A와 같은 "active_conversation" 개념 공유.
-    f = _state_dir() / "current_conversation.json"
+    # #2589: 파일명이 워커별로 갈리므로(_current_conversation_filename) STATE_DIR이 여러
+    # 워커에서 같은 공유 homedir로 떨어져도 서로의 대화를 덮어쓰지 않는다.
+    f = _state_dir() / _current_conversation_filename()
     if f.exists():
         try:
             cid = json.loads(f.read_text()).get("conversation_id")
