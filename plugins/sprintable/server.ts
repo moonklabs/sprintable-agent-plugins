@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 /**
+ * story #2596 e2e merge-block probe — intentionally unbumped, expect merge blocked.
  * E-INJECT-ADAPTERS:Phase0 — CC 주입 어댑터 (SSE dial-out).
  *
  * Sprintable Agent Gateway /api/v2/agent/stream (SSE) 소비 → deliver() →
