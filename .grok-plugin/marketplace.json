@@ -1,0 +1,13 @@
+{
+  "name": "moonklabs",
+  "description": "Moonklabs channel plugins — connect Grok Build sessions to Sprintable.",
+  "owner": { "name": "moonklabs", "email": "dev1@moonklabs.com" },
+  "plugins": [
+    {
+      "name": "sprintable-grok",
+      "description": "Sprintable channel + tools for Grok Build — Stop-hook message injection, hosted MCP for tools.",
+      "category": "productivity",
+      "source": { "type": "local", "path": "./plugins/sprintable-grok" }
+    }
+  ]
+}

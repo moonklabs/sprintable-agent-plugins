@@ -1,0 +1,7 @@
+{
+  "name": "sprintable-grok",
+  "version": "0.1.0",
+  "description": "Sprintable channel + tools for Grok Build — real-time Agent Gateway events via hooks, hosted MCP for tools.",
+  "author": { "name": "moonklabs" },
+  "homepage": "https://sprintable.ai"
+}
