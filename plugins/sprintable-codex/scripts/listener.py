@@ -36,9 +36,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _credentials import load_credentials  # noqa: E402
 from _common import (  # noqa: E402
-    enqueue, pop_oldest, set_active_conversation, log_event, get_seq_cursor,
+    enqueue, pop_oldest, _requeue, set_active_conversation, log_event, get_seq_cursor,
     advance_seq_cursor, get_current_session, post_reply,
 )
+from envelope import format_envelope_text  # noqa: E402
 
 try:
     from sprintable_sse import SprintableSSEClient, MessageContext  # noqa: E402
@@ -59,7 +60,7 @@ async def _attempt_wake(cwd: str | None) -> None:
 
     codex_bin = shutil.which("codex")
     if not codex_bin:
-        enqueue(cwd, item["content"], item["conversation_id"])  # 되돌려놓기
+        _requeue(cwd, item)  # 되돌려놓기(envelope 필드까지 보존)
         log_event(cwd, "wake_skipped", reason="codex_binary_not_found")
         return
 
@@ -67,8 +68,16 @@ async def _attempt_wake(cwd: str | None) -> None:
     project_cwd = session.get("cwd") or cwd
     last_msg_fd, last_msg_path = tempfile.mkstemp(prefix="codex-wake-", suffix=".txt")
     os.close(last_msg_fd)
+    # story #2583 — resume 프롬프트도 envelope으로 감싼다: Stop-hook 배치드레인 경로와
+    # 달리 이 경로는 item["content"]를 codex에 직접 넘기던 별개 주입 지점이었다.
+    wake_text = format_envelope_text(
+        item["content"], sender_name=item.get("sender_name", ""),
+        sender_id=item.get("sender_id", ""), sender_type=item.get("sender_type", ""),
+        event_kind=item.get("event_kind", ""), ts=item.get("ts", ""),
+        conversation_id=item["conversation_id"],
+    )
     cmd = [codex_bin, "exec", "--cd", project_cwd or ".", "--skip-git-repo-check",
-           "-o", last_msg_path, "resume", session_id, item["content"]]
+           "-o", last_msg_path, "resume", session_id, wake_text]
     log_event(cwd, "wake_attempt", session_id=session_id, row_id=item["id"])
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -80,7 +89,7 @@ async def _attempt_wake(cwd: str | None) -> None:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            enqueue(cwd, item["content"], item["conversation_id"])
+            _requeue(cwd, item)
             log_event(cwd, "wake_failed", session_id=session_id, reason="timeout")
             return
         if proc.returncode == 0:
@@ -93,7 +102,7 @@ async def _attempt_wake(cwd: str | None) -> None:
             except OSError:
                 reply_text = ""
             if not reply_text:
-                enqueue(cwd, item["content"], item["conversation_id"])
+                _requeue(cwd, item)
                 log_event(cwd, "wake_failed", session_id=session_id, row_id=item["id"],
                            reason="empty_last_message")
             else:
@@ -106,15 +115,15 @@ async def _attempt_wake(cwd: str | None) -> None:
                     # QA 지적 반영.
                     log_event(cwd, "wake_deduped", session_id=session_id, row_id=item["id"])
                 else:
-                    enqueue(cwd, item["content"], item["conversation_id"])
+                    _requeue(cwd, item)
                     log_event(cwd, "wake_failed", session_id=session_id, row_id=item["id"],
                                reason="post_reply_failed")
         else:
-            enqueue(cwd, item["content"], item["conversation_id"])
+            _requeue(cwd, item)
             log_event(cwd, "wake_failed", session_id=session_id,
                        exit_code=proc.returncode, stderr=(stderr or b"").decode(errors="replace")[:500])
     except Exception as exc:
-        enqueue(cwd, item["content"], item["conversation_id"])
+        _requeue(cwd, item)
         log_event(cwd, "wake_failed", session_id=session_id, reason=str(exc))
     finally:
         try:
@@ -134,7 +143,11 @@ async def on_message(cwd: str | None, ctx) -> None:
     cursor = get_seq_cursor(cwd)
     if ctx.is_backfill and (not ctx.seq or ctx.seq <= cursor):
         return
-    enqueue(cwd, ctx.content, ctx.conversation_id)
+    enqueue(
+        cwd, ctx.content, ctx.conversation_id,
+        sender_name=ctx.sender_name, sender_id=ctx.sender_id, sender_type=ctx.sender_type,
+        event_kind=ctx.event_kind, ts=ctx.ts,
+    )
     set_active_conversation(cwd, ctx.conversation_id)
     advance_seq_cursor(cwd, ctx.seq)
     asyncio.create_task(_attempt_wake(cwd))

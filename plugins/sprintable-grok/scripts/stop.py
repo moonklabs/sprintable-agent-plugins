@@ -25,6 +25,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _credentials import load_credentials  # noqa: E402
 from _common import pop_oldest, post_reply, set_active_conversation, get_active_conversation, log_event  # noqa: E402
+from envelope import format_envelope_text  # noqa: E402
+
+
+def _render(item: dict) -> str:
+    return format_envelope_text(
+        item["content"], sender_name=item.get("sender_name", ""), sender_id=item.get("sender_id", ""),
+        sender_type=item.get("sender_type", ""), event_kind=item.get("event_kind", ""),
+        ts=item.get("ts", ""), conversation_id=item["conversation_id"],
+    )
 
 
 def main() -> None:
@@ -62,10 +71,11 @@ def main() -> None:
         return
 
     set_active_conversation(cwd, items[-1]["conversation_id"])
+    # story #2583 — 배치 안 각 항목이 자기 발신자를 그대로 유지해 렌더된다.
     if len(items) == 1:
-        block_reason = items[0]["content"]
+        block_reason = _render(items[0])
     else:
-        joined = "\n\n".join(f"- {it['content']}" for it in items)
+        joined = "\n\n".join(_render(it) for it in items)
         block_reason = f"(밀린 메시지 {len(items)}건)\n{joined}"
     log_event(cwd, "stop_inject", session_id=session_id, batch_size=len(items))
     print(json.dumps({"decision": "block", "reason": block_reason}))
