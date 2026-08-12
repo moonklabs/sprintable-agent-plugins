@@ -9,8 +9,12 @@ name: Plugin Version Guard
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "plugins/**"
+    # No `paths:` filter here on purpose. If this is ever registered as a required
+    # status check and a PR touches zero plugins/** files, a paths-filtered trigger
+    # would never create a run — the required check would sit "pending" forever and
+    # block merge permanently (documented GHA gotcha). Instead the job below always
+    # runs and does its own plugins/** filtering, so it always resolves to a real
+    # success/failure — safe to require.
 
 jobs:
   version-guard:
