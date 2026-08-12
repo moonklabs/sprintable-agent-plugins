@@ -65,3 +65,5 @@ To ship a change:
    ```
    then restart the session. Confirm the new version actually loaded before
    calling the release done — a green merge is not a green delivery.
+
+<!-- demo: path-filter check, no plugins/** touched -->
