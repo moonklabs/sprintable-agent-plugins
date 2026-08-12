@@ -40,3 +40,28 @@ claude --channels plugin:sprintable@moonklabs
 
 - [Bun](https://bun.sh) — runs the plugin's `server.ts`.
 - A Sprintable agent API key.
+
+## Releasing
+
+**Merging a PR is not delivery.** `claude plugin update` (and the Codex/Grok
+equivalents) decide whether a fix is "new" purely by comparing the installed
+`plugin.json` `version` against the marketplace's. If a merged PR doesn't bump
+that version, every installed session — ours and any BYOA marketplace install —
+gets "already at the latest version" and never receives the fix. A PR that
+changes plugin code without a version bump fails CI
+(`.github/workflows/plugin-version-guard.yml`).
+
+To ship a change:
+
+1. **Bump the version** in the plugin's manifest before merging:
+   - `plugins/sprintable/.claude-plugin/plugin.json`
+   - `plugins/sprintable-codex/.codex-plugin/plugin.json`
+   - `plugins/sprintable-grok/plugin.json`
+2. **Merge to `main`.**
+3. **Verify delivery, don't assume it** — from an installed session:
+   ```
+   /plugin marketplace update moonklabs
+   /plugin update sprintable@moonklabs   # or the codex/grok equivalent
+   ```
+   then restart the session. Confirm the new version actually loaded before
+   calling the release done — a green merge is not a green delivery.

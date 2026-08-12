@@ -1,0 +1,88 @@
+name: Plugin Version Guard
+
+# story #2596 — `claude plugin update` decides "latest" purely from plugin.json's
+# `version` field. Merging fixes without bumping it means the marketplace cache
+# never advances, so `update` reports "already at the latest version" and nobody
+# — us or BYOA marketplace installers (customer-zero) — ever receives the fix.
+# This guard fails the PR before that can happen again.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "plugins/**"
+
+jobs:
+  version-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a version bump when plugin code changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # One manifest per plugin — paths are NOT uniform (each host CLI picked
+          # its own convention), so this can't be a single glob:
+          #   sprintable       -> plugins/sprintable/.claude-plugin/plugin.json
+          #   sprintable-codex -> plugins/sprintable-codex/.codex-plugin/plugin.json
+          #   sprintable-grok  -> plugins/sprintable-grok/plugin.json (no dot-dir)
+          declare -A MANIFESTS=(
+            [sprintable]="plugins/sprintable/.claude-plugin/plugin.json"
+            [sprintable-codex]="plugins/sprintable-codex/.codex-plugin/plugin.json"
+            [sprintable-grok]="plugins/sprintable-grok/plugin.json"
+          )
+
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "changed files:"
+          echo "$CHANGED_FILES"
+
+          FAIL=0
+
+          for plugin in "${!MANIFESTS[@]}"; do
+            manifest="${MANIFESTS[$plugin]}"
+
+            # Gate scope, declared explicitly (AC1 — what this guard does NOT catch):
+            # *.md changes under a plugin dir are excluded on purpose — docs-only
+            # edits don't need a marketplace version bump to reach anyone. Anything
+            # else under plugins/<name>/ (code, hooks, mcp config, skills) counts.
+            plugin_changes=$(echo "$CHANGED_FILES" | grep "^plugins/${plugin}/" | grep -v '\.md$' || true)
+
+            if [ -z "$plugin_changes" ]; then
+              echo "-- $plugin: no gated changes, skipping"
+              continue
+            fi
+
+            if ! git cat-file -e "$BASE_SHA:$manifest" 2>/dev/null; then
+              echo "-- $plugin: $manifest didn't exist at base (new plugin) — skipping version check"
+              continue
+            fi
+
+            base_version=$(git show "$BASE_SHA:$manifest" | jq -r '.version // ""')
+            head_version=$(jq -r '.version // ""' "$manifest")
+
+            echo "-- $plugin: base=$base_version head=$head_version"
+
+            if [ "$base_version" = "$head_version" ]; then
+              echo "::error file=$manifest::[$plugin] plugin code changed (see: $(echo "$plugin_changes" | tr '\n' ' ')) but version is still $head_version. Bump $manifest before merge — an unbumped merge never reaches an installed session (story #2596)."
+              FAIL=1
+            fi
+          done
+
+          if [ "$FAIL" -eq 1 ]; then
+            exit 1
+          fi
+
+      # Known gaps, left in the open rather than silently uncovered:
+      # - Doc-only (*.md) changes inside a plugin dir are intentionally not gated.
+      # - Changes outside plugins/** (root marketplace.json, .agents/, .grok-plugin/)
+      #   aren't covered — those files don't carry a version field today.
+      # - plugins/sprintable/package.json has its own independent `version` (bun
+      #   package version) that this guard does not check — it isn't what
+      #   `claude plugin update` reads. Tracked as a known drift, not this guard's job.
