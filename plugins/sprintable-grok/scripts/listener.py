@@ -31,7 +31,11 @@ async def on_message(cwd: str | None, ctx) -> None:
     cursor = get_seq_cursor(cwd)
     if ctx.is_backfill and (not ctx.seq or ctx.seq <= cursor):
         return
-    enqueue(cwd, ctx.content, ctx.conversation_id)
+    enqueue(
+        cwd, ctx.content, ctx.conversation_id,
+        sender_name=ctx.sender_name, sender_id=ctx.sender_id, sender_type=ctx.sender_type,
+        event_kind=ctx.event_kind, ts=ctx.ts,
+    )
     set_active_conversation(cwd, ctx.conversation_id)
     advance_seq_cursor(cwd, ctx.seq)
 

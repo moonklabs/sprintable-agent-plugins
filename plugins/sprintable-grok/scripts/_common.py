@@ -30,22 +30,48 @@ def log_event(cwd: str | None, kind: str, **fields) -> None:
         f.write(json.dumps({"ts": time.time(), "kind": kind, **fields}, ensure_ascii=False) + "\n")
 
 
+# story #2583 — 큐 항목이 conversation_id/content만 실어 stop.py까지 넘어가면 발신자/이벤트
+# 종류/ts가 조립 단계에서 버려진다(정찰 doc 2583-injection-envelope-recon-20260812). 큐 스키마
+# 자체를 확장해 envelope 필드를 pop 이후까지 보존한다. codex(#2557 원작)와 byte-identical 패치
+# — 이 파일 자체가 codex의 수동 동기 사본이라 codex 쪽 patch를 그대로 반영.
+_ENVELOPE_QUEUE_COLUMNS = ("sender_name", "sender_id", "sender_type", "event_kind", "ts")
+
+
 def _conn(cwd: str | None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(_state_dir(cwd) / "queue.sqlite"), timeout=10)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS queue ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, "
-        "conversation_id TEXT, created_at REAL NOT NULL)"
+        "conversation_id TEXT, created_at REAL NOT NULL, "
+        "sender_name TEXT NOT NULL DEFAULT '', sender_id TEXT NOT NULL DEFAULT '', "
+        "sender_type TEXT NOT NULL DEFAULT '', event_kind TEXT NOT NULL DEFAULT '', "
+        "ts TEXT NOT NULL DEFAULT '')"
     )
+    # 이 변경 前에 이미 만들어진 queue.sqlite는 위 CREATE TABLE IF NOT EXISTS가 손 안 댐 —
+    # 기존 파일에 새 컬럼을 직접 추가(idempotent: 이미 있으면 sqlite3.OperationalError를
+    # 잡고 무시 — ALTER TABLE엔 IF NOT EXISTS가 없다).
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(queue)").fetchall()}
+    for col in _ENVELOPE_QUEUE_COLUMNS:
+        if col not in existing:
+            try:
+                conn.execute(f"ALTER TABLE queue ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 동시 프로세스가 먼저 추가했을 수 있음 — 결과는 같으니 무시.
     return conn
 
 
-def enqueue(cwd: str | None, content: str, conversation_id: str) -> int:
+def enqueue(
+    cwd: str | None, content: str, conversation_id: str, *,
+    sender_name: str = "", sender_id: str = "", sender_type: str = "",
+    event_kind: str = "", ts: str = "",
+) -> int:
     conn = _conn(cwd)
     try:
         cur = conn.execute(
-            "INSERT INTO queue (content, conversation_id, created_at) VALUES (?, ?, ?)",
-            (content, conversation_id, time.time()),
+            "INSERT INTO queue (content, conversation_id, created_at, "
+            "sender_name, sender_id, sender_type, event_kind, ts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (content, conversation_id, time.time(), sender_name, sender_id, sender_type, event_kind, ts),
         )
         conn.commit()
         log_event(cwd, "enqueued", row_id=cur.lastrowid, conversation_id=conversation_id)
@@ -59,18 +85,34 @@ def pop_oldest(cwd: str | None) -> dict | None:
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT id, content, conversation_id, created_at FROM queue ORDER BY id ASC LIMIT 1"
+            "SELECT id, content, conversation_id, created_at, "
+            "sender_name, sender_id, sender_type, event_kind, ts "
+            "FROM queue ORDER BY id ASC LIMIT 1"
         ).fetchone()
         if row is None:
             conn.execute("COMMIT")
             return None
         conn.execute("DELETE FROM queue WHERE id = ?", (row[0],))
         conn.commit()
-        item = {"id": row[0], "content": row[1], "conversation_id": row[2], "created_at": row[3]}
+        item = {
+            "id": row[0], "content": row[1], "conversation_id": row[2], "created_at": row[3],
+            "sender_name": row[4], "sender_id": row[5], "sender_type": row[6],
+            "event_kind": row[7], "ts": row[8],
+        }
         log_event(cwd, "popped", row_id=row[0], enqueued_at=row[3])
         return item
     finally:
         conn.close()
+
+
+def _requeue(cwd: str | None, item: dict) -> int:
+    """실패/재시도 경로에서 pop한 item을 그대로 되돌려놓는다 — envelope 필드까지 보존."""
+    return enqueue(
+        cwd, item["content"], item["conversation_id"],
+        sender_name=item.get("sender_name", ""), sender_id=item.get("sender_id", ""),
+        sender_type=item.get("sender_type", ""), event_kind=item.get("event_kind", ""),
+        ts=item.get("ts", ""),
+    )
 
 
 def queue_depth(cwd: str | None) -> int:
