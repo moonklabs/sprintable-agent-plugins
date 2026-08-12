@@ -140,16 +140,37 @@ def _claim_reply_once(cwd: str | None, session_id: str | None, text: str) -> boo
         conn.close()
 
 
-def post_reply(cwd: str | None, conversation_id: str, text: str, session_id: str | None = None) -> bool:
-    """실패해도 예외를 던지지 않는다 — AC3(세션 안 깨뜨림). 성공 여부만 반환.
-    session_id가 주어지면 (session_id, text) 중복 회신을 원자적으로 걸러낸다."""
+def _release_claim(cwd: str | None, session_id: str | None, text: str) -> None:
+    """POST 실패가 확定되면 클레임을 즉시 해제 — codex PR#7(#2567) 카디르 QA 지적을
+    그대로 이식: 선점을 POST 성공 전에 커밋하므로, 실패해도 해제 안 하면 «클레임
+    성공→POST 실패→재시도가 영구 dedup에 막힘» 무음유실이 남는다. 선점 자체는 유지
+    (POST 전으로 옮기면 listener와 Stop이 동시에 같은 텍스트를 노려 이중게시 race가
+    다시 열림 — 그건 원래 방지 대상)."""
+    conn = _conn(cwd)
+    try:
+        content_hash = hashlib.sha256(text.encode()).hexdigest()
+        conn.execute(
+            "DELETE FROM replied WHERE session_id = ? AND content_hash = ?",
+            (session_id or "", content_hash),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def post_reply(cwd: str | None, conversation_id: str, text: str, session_id: str | None = None) -> str:
+    """반환값 3종: "sent"(게시 성공) | "duplicate"(이미 게시됨·재시도 불필요) |
+    "failed"(게시 실패·재시도 필요 — 클레임도 해제해둠). 실패해도 예외는 안 던진다
+    (AC3: 세션 안 깨뜨림)."""
     if session_id is not None and not _claim_reply_once(cwd, session_id, text):
         log_event(cwd, "reply_deduped", session_id=session_id)
-        return False
+        return "duplicate"
     creds = load_credentials(cwd)
     api_key = creds.get("SPRINTABLE_API_KEY")
     if not api_key:
-        return False
+        if session_id is not None:
+            _release_claim(cwd, session_id, text)
+        return "failed"
     api_url = creds.get("SPRINTABLE_API_URL", "https://app.sprintable.ai")
     url = f"{api_url.rstrip('/')}/api/v2/conversations/{conversation_id}/messages"
     req = urllib.request.Request(
@@ -161,7 +182,9 @@ def post_reply(cwd: str | None, conversation_id: str, text: str, session_id: str
         with urllib.request.urlopen(req, timeout=15) as resp:
             resp.read()
         log_event(cwd, "replied", conversation_id=conversation_id, text=text[:200])
-        return True
+        return "sent"
     except Exception as exc:
         log_event(cwd, "reply_failed", conversation_id=conversation_id, error=str(exc))
-        return False
+        if session_id is not None:
+            _release_claim(cwd, session_id, text)
+        return "failed"
