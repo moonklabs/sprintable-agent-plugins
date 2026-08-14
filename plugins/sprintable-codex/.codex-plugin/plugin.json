@@ -1,6 +1,6 @@
 {
   "name": "sprintable-codex",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sprintable channel + tools for Codex CLI — real-time Agent Gateway events via hooks, hosted MCP for tools.",
   "author": { "name": "moonklabs" },
   "homepage": "https://sprintable.ai",

@@ -14,8 +14,9 @@ data/payload) · `.ts`(=`data.get("created_at") or payload.get("created_at")`). 
 (E-ACTIVATION Phase 2) 이 사본은 story #2655 스코프상 의도적으로 안 가져온다 —
 회귀 아님, 다만 "앞으로도 영원히 안 쓸 것"의 보장은 아니다.
 
-이 파일을 고칠 땐 `plugins/sprintable-grok/scripts/sprintable_sse.py`도 반드시 같이
-고칠 것 — CI `sse-copy-parity` job(story #2592/#2653)이 두 사본의 byte-diff를 강제한다.
+이 파일을 고칠 땐 반대편 사본(`plugins/sprintable-codex/`↔`plugins/sprintable-grok/`의
+`scripts/sprintable_sse.py`)도 반드시 같이 고칠 것 — CI `sse-copy-parity` job
+(story #2592/#2653)이 두 사본의 byte-diff를 강제한다.
 
 공통부: SSE 소비 · 파서 · dedup · ack(contiguous, min-1 앵커링) · backoff 재연결.
 어댑터는 `on_message` 콜백(주입부)만 구현하면 된다.
