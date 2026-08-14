@@ -1,0 +1,106 @@
+name: Design Review Gate
+
+# story #2592 — ported from moonklabs/sprintable's design-review-gate.yml (story #2361)
+# for label-set/mechanism parity. This repo (CLI plugin scripts + docs, no web UI) has
+# no path that currently matches a "visual/copy" surface the way sprintable's does —
+# the scope pattern below is a placeholder for if this repo ever grows one (e.g. a
+# packaged web asset). Until then this gate always evaluates to in_scope=false and
+# design:pass is never required — that's an intentional resting state (evaluated and
+# found empty), not a skip. design:pass/design:changes labels exist for consistency
+# with the rest of the org's label vocabulary even while unused here.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+concurrency:
+  group: design-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  design-review-gate:
+    name: Design review gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine if this PR touches design-review paths
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          CHANGED="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"
+          echo "changed files:"
+          echo "${CHANGED}"
+          # Placeholder scope — no visual/UI surface exists in this repo today.
+          MATCHED="$(printf '%s\n' "${CHANGED}" | grep -E '^ui/' || true)"
+          if [ -n "${MATCHED}" ]; then
+            echo "in_scope=true" >> "$GITHUB_OUTPUT"
+            echo "This PR touches design-review paths:"
+            echo "${MATCHED}"
+          else
+            echo "in_scope=false" >> "$GITHUB_OUTPUT"
+            echo "No changed file matches the design-review path list — this PR is out of this gate's scope (not a skip: it was evaluated and found empty)."
+          fi
+
+      - name: Enforce design:changes blocks merge (unconditional — regardless of design:pass)
+        if: steps.scope.outputs.in_scope == 'true'
+        env:
+          HAS_DESIGN_CHANGES: ${{ contains(github.event.pull_request.labels.*.name, 'design:changes') }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_DESIGN_CHANGES}" = "true" ]; then
+            echo "::error title=design:changes open::A design guardian requested changes (design:changes) and they haven't been marked resolved yet. This blocks merge regardless of whether design:pass is also present."
+            exit 1
+          fi
+          echo "design:changes not present."
+
+      - name: Enforce design:pass label when in scope
+        if: steps.scope.outputs.in_scope == 'true'
+        env:
+          HAS_DESIGN_PASS: ${{ contains(github.event.pull_request.labels.*.name, 'design:pass') }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_DESIGN_PASS}" = "true" ]; then
+            echo "design:pass present — design axis reviewed."
+          else
+            echo "::error title=design:pass missing::This PR touches a design-review path without the design:pass label."
+            exit 1
+          fi
+
+      - name: Enforce design:pass label freshness (not stale vs latest commit)
+        if: steps.scope.outputs.in_scope == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          LAST_COMMIT_TS="$(git log -1 --format=%cI "${HEAD_SHA}")"
+          LABEL_TS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/events" --paginate \
+            --jq '[.[] | select(.event=="labeled" and .label.name=="design:pass") | .created_at] | sort | last // empty')"
+          echo "latest commit (${HEAD_SHA}): ${LAST_COMMIT_TS}"
+          echo "design:pass last attached: ${LABEL_TS:-<none found>}"
+          if [ -z "${LABEL_TS}" ]; then
+            echo "::error title=design:pass timeline unreadable::design:pass label is present but no matching 'labeled' timeline event was found for it."
+            exit 1
+          fi
+          LAST_COMMIT_EPOCH="$(date -d "${LAST_COMMIT_TS}" +%s)"
+          LABEL_EPOCH="$(date -d "${LABEL_TS}" +%s)"
+          if [ "${LABEL_EPOCH}" -lt "${LAST_COMMIT_EPOCH}" ]; then
+            echo "::error title=design:pass is stale::design:pass was attached at ${LABEL_TS}, before the latest commit (${LAST_COMMIT_TS})."
+            exit 1
+          fi
+          echo "design:pass attached at ${LABEL_TS} — at or after the latest commit (${LAST_COMMIT_TS}). Fresh."

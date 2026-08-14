@@ -1,0 +1,82 @@
+name: QA Review Gate
+
+# story #2592 — ported from moonklabs/sprintable's qa-review-gate.yml (story #2364).
+# Same mechanism: qa:pass label required on every PR before merge. No path filter —
+# the job always runs; path scoping (if any) happens inside a step, never at the
+# trigger level, so a required check can't sit "pending forever" from being skipped.
+# qa:pass only speaks to the QA axis (paths a real user/agent takes) — not design,
+# performance, or live-pixel rendering.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+concurrency:
+  group: qa-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  qa-review-gate:
+    name: QA review gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce qa:changes blocks merge (unconditional — regardless of qa:pass)
+        env:
+          HAS_QA_CHANGES: ${{ contains(github.event.pull_request.labels.*.name, 'qa:changes') }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_QA_CHANGES}" = "true" ]; then
+            echo "::error title=qa:changes open::QA requested changes (qa:changes) and they haven't been marked resolved yet. This blocks merge regardless of whether qa:pass is also present — remove qa:changes (or let QA replace it with qa:pass) after the changes are addressed."
+            exit 1
+          fi
+          echo "qa:changes not present."
+
+      - name: Enforce qa:pass label (no path scoping — applies to every PR)
+        env:
+          HAS_QA_PASS: ${{ contains(github.event.pull_request.labels.*.name, 'qa:pass') }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_QA_PASS}" = "true" ]; then
+            echo "qa:pass present — QA axis (the paths a real user/agent takes) reviewed. This label speaks only to the QA axis — design and live-pixel rendering are not what it says."
+          else
+            echo "::error title=qa:pass missing::This PR has no qa:pass label. QA review is required before merge — CI green only proves the code runs, not that the paths a real user/agent takes are correct."
+            exit 1
+          fi
+
+      # Freshness: qa:pass attached before the latest commit is stale — code moved
+      # since review. fail-closed if the timeline API can't be read.
+      - name: Enforce qa:pass label freshness (not stale vs latest commit)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          LAST_COMMIT_TS="$(git log -1 --format=%cI "${HEAD_SHA}")"
+          LABEL_TS="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/events" --paginate \
+            --jq '[.[] | select(.event=="labeled" and .label.name=="qa:pass") | .created_at] | sort | last // empty')"
+          echo "latest commit (${HEAD_SHA}): ${LAST_COMMIT_TS}"
+          echo "qa:pass last attached: ${LABEL_TS:-<none found>}"
+          if [ -z "${LABEL_TS}" ]; then
+            echo "::error title=qa:pass timeline unreadable::qa:pass label is present but no matching 'labeled' timeline event was found for it — freshness can't be verified. Failing closed (treated as stale)."
+            exit 1
+          fi
+          LAST_COMMIT_EPOCH="$(date -d "${LAST_COMMIT_TS}" +%s)"
+          LABEL_EPOCH="$(date -d "${LABEL_TS}" +%s)"
+          if [ "${LABEL_EPOCH}" -lt "${LAST_COMMIT_EPOCH}" ]; then
+            echo "::error title=qa:pass is stale::qa:pass was attached at ${LABEL_TS}, before the latest commit (${LAST_COMMIT_TS}). Code has moved since QA reviewed — re-review and re-attach qa:pass."
+            exit 1
+          fi
+          echo "qa:pass attached at ${LABEL_TS} — at or after the latest commit (${LAST_COMMIT_TS}). Fresh."
