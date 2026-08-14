@@ -39,21 +39,34 @@ explicitly if agents share a `GROK_HOME` and still need separate keys.
 
 This step must run **every time** Save runs (not only on first configure), so re-running `/sprintable-grok:configure` after a plugin upgrade refreshes the workaround copy too.
 
-1. Determine the plugin's installed root — the directory containing this `SKILL.md`, two levels up (`.../sprintable-grok/skills/configure/SKILL.md` → `.../sprintable-grok`). Call it `$PLUGIN_ROOT`.
-2. `mkdir -p "$GROK_HOME/hooks"` (`$GROK_HOME` defaults to `~/.grok`).
-3. Read `$PLUGIN_ROOT/hooks/hooks.json` and write a copy to `$GROK_HOME/hooks/sprintable-grok.json` with every `${GROK_PLUGIN_ROOT}` in a `command` replaced by the **literal resolved** `$PLUGIN_ROOT` path — the `${GROK_PLUGIN_ROOT}` env var is only injected for hooks Grok recognizes as plugin-sourced, which this workaround copy (now a plain global hook) is not. **Validate after writing** (`python3 -c "import json; json.load(open('$GROK_HOME/hooks/sprintable-grok.json'))"` or equivalent) — if it fails to parse, rewrite the file from the source `hooks.json` from scratch rather than patching the broken copy; don't leave a corrupt file in place, since a broken global hooks file can affect other tooling that reads `$GROK_HOME/hooks/`.
-4. Write `$GROK_HOME/hooks/sprintable-grok.meta.json` alongside it:
-   ```json
-   {
-     "managed_by": "sprintable-grok plugin's configure skill — do not hand-edit",
-     "workaround_for": "grok plugin-hooks discovery gap (grok 1.0.0, see plugin README)",
-     "workaround_version": 1,
-     "plugin_root": "<resolved $PLUGIN_ROOT>",
-     "updated_at": "<ISO 8601 now>"
-   }
-   ```
-   The `workaround_version` field lets a future configure run (once grok fixes native plugin-hook discovery) detect this file and remove itself — check that file's presence in a future skill revision before assuming the workaround is still needed.
-5. Mention in the confirmation message that this workaround file was written and why (one line — don't bury it).
+**story #2658**: this used to be spelled out here as manual steps for the
+skill-running agent to follow by hand. It's now `scripts/install_hooks_workaround.py`
+(same plugin, one level up from this `skills/configure/` dir) — a standalone
+script with no LLM in the loop, so headless/CI/fleet automation that installs
+this plugin without ever running this skill can apply the identical workaround
+too (see README's "Headless / automation install" section). Run it:
+
+```
+python3 <PLUGIN_ROOT>/scripts/install_hooks_workaround.py
+```
+
+where `$PLUGIN_ROOT` is this plugin's installed root — the directory containing
+this `SKILL.md`, two levels up (`.../sprintable-grok/skills/configure/SKILL.md`
+→ `.../sprintable-grok`). It prints the path it wrote on success (exit 0) or a
+clear error to stderr and exits non-zero on failure (e.g. source `hooks.json`
+missing) — never leaves a half-written/corrupt hooks file behind. Mention in
+the confirmation message that this workaround file was (re)written and why
+(one line — don't bury it).
+
+The script writes `$GROK_HOME/hooks/sprintable-grok.json` (hooks copy, every
+`${GROK_PLUGIN_ROOT}` in a `command` replaced with the literal resolved
+`$PLUGIN_ROOT` — the env var is only injected for hooks Grok recognizes as
+plugin-sourced, which this copy, now a plain global hook, is not) and
+`$GROK_HOME/hooks/sprintable-grok.meta.json` alongside it (`workaround_version`,
+`plugin_root`, `updated_at` — lets a future configure run, once grok fixes
+native plugin-hook discovery, detect this file and remove itself; check its
+presence in a future skill revision before assuming the workaround is still
+needed).
 
 Double-firing is safe if a future grok build starts loading the plugin's native `hooks/hooks.json` *in addition to* this workaround copy for the same event: the queue-drain (`stop.py`) is atomic per pop, and `_common.py`'s `post_reply` dedups on `(session_id, message)` before ever sending — a second firing for the same Stop event finds nothing left to send.
 

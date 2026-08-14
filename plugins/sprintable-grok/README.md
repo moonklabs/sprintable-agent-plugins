@@ -29,7 +29,45 @@ Plugin-sourced `hooks/hooks.json` never appears among the scanned sources — re
 
 Reported upstream via grok's own `/feedback` command (`xai-org/grok-build` has its issue tracker disabled, so this is the only first-party channel).
 
-**Workaround, applied by the `configure` skill itself**: every `/sprintable-grok:configure` call also writes a copy of this plugin's `hooks/hooks.json` (with `${GROK_PLUGIN_ROOT}` resolved to a literal path) to `$GROK_HOME/hooks/sprintable-grok.json`, plus a `sprintable-grok.meta.json` marker noting it's workaround-managed and versioned. `configure clear` removes both files. This keeps the user-facing install story at "2 commands + configure" — no extra step, since configure was already required to set the key. If grok ships a fix, a future plugin revision can detect the meta marker and clean up the redundant global copy; until then, `stop.py`'s reply path is deduplicated per `(session_id, message)` so a session that (for any reason) ends up loading both copies still only replies once.
+**Workaround**: `scripts/install_hooks_workaround.py` writes a copy of this
+plugin's `hooks/hooks.json` (with `${GROK_PLUGIN_ROOT}` resolved to a literal
+path) to `$GROK_HOME/hooks/sprintable-grok.json`, plus a
+`sprintable-grok.meta.json` marker noting it's workaround-managed and
+versioned. The `configure` skill runs it as a side effect of every
+`/sprintable-grok:configure` call (interactive users get it for free — no
+extra step, since configure was already required to set the key); `configure
+clear` removes both files. If grok ships a fix, a future plugin revision can
+detect the meta marker and clean up the redundant global copy; until then,
+`stop.py`'s reply path is deduplicated per `(session_id, message)` so a
+session that (for any reason) ends up loading both copies still only replies
+once.
+
+### Headless / automation install (story #2658)
+
+The `configure` skill only runs inside an LLM-driven Grok session (it's a
+slash command) — automation that does `grok plugin install ...` and then
+drives sessions without ever invoking `/sprintable-grok:configure` (writing
+`SPRINTABLE_API_KEY` straight to `.env` instead, say) never triggers the
+workaround above, so its hooks stay permanently unregistered even though the
+plugin looks correctly installed (`grok plugin list`/`details` show it fine —
+`has_hooks=true` at the discovery-scanner layer, `total_hooks=0` at the
+actual hook-merge layer). This is what tripped up the clone-zero
+verification rig, not a separate bug from the one above.
+
+Run the same workaround as a plain script, no LLM/skill needed:
+
+```
+grok plugin install moonklabs/sprintable-agent-plugins#plugins/sprintable-grok --trust
+grok plugin details sprintable-grok   # prints "path:" and "(subdir: plugins/sprintable-grok)"
+python3 <path>/plugins/sprintable-grok/scripts/install_hooks_workaround.py
+```
+
+`grok plugin details` has no `--json` output (checked `grok plugin details
+--help` — text only) — read the `path:` line and the `(subdir: ...)` suffix
+from its plain output and join them yourself, or just hardcode the path your
+own install step already used (automation that ran `grok plugin install`
+itself already knows where it put the plugin). Re-run the script after every
+plugin upgrade, same as interactive users get from re-running `configure`.
 
 ## Configure
 
