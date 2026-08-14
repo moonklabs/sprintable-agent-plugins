@@ -173,6 +173,10 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ['text'],
+        // story #2622(Pedro QA): 오타 파라미터명(예: 습관대로 conversation_id)이 조용히
+        // 버려져 latestInboundMeta 폴백으로 새면, 이 스토리가 막으려는 정확히 그 오배송
+        // 클래스가 한 겹 남는다 — 스키마 레벨에서 알 수 없는 필드를 거부한다.
+        additionalProperties: false,
       },
     },
     {
