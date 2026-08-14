@@ -65,3 +65,4 @@ To ship a change:
    ```
    then restart the session. Confirm the new version actually loaded before
    calling the release done — a green merge is not a green delivery.
+# branch-protection positive-control test, will be closed without merge
