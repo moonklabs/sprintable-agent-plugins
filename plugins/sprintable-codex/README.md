@@ -11,7 +11,22 @@ codex plugin marketplace add moonklabs/sprintable-agent-plugins
 codex plugin add sprintable-codex@moonklabs
 ```
 
-Approve the hook trust prompt once on first run. Then configure your key (see below) and launch `codex` normally — no extra flags.
+**Required one-time step — trust this plugin's hooks**: installing/enabling a
+plugin does **not** auto-trust its bundled hooks (codex CLI's own security
+model, confirmed against `codex` 0.147.0 — story #2656). Codex silently skips
+any hook it hasn't hash-reviewed: the session still completes, no error is
+printed, no `SessionStart`/`Stop` hook line appears anywhere in the output —
+so a fresh install that skips this step *looks* fine and just never delivers
+any Sprintable messages. Run `/hooks` once in the interactive TUI after
+installing, review the `sprintable-codex` hooks, and trust them. This is a
+one-time step per `CODEX_HOME` — after that, launch `codex` normally with no
+extra flags.
+
+(Automation that boots `codex exec` headlessly, e.g. CI or a fleet
+orchestrator that already vets this plugin's source out-of-band, can pass
+`--dangerously-bypass-hook-trust` instead of the interactive step above — see
+`codex exec --help`. Don't reach for this as a way around trusting the plugin
+yourself; it's documented by Codex as an automation-only escape hatch.)
 
 ## Configure
 
@@ -56,6 +71,15 @@ authenticated too; the channel (hooks) works independently of this.
 
 ## Known scope for this package
 
+- **Untrusted hooks are undetectable from inside this plugin (story #2656).**
+  If the one-time `/hooks` trust step above is skipped, Codex skips this
+  plugin's `SessionStart`/`UserPromptSubmit`/`Stop` hooks entirely — none of
+  our scripts ever run, so they can't log or signal anything, and Codex itself
+  prints zero hook-related output either way. A session that "completes fine"
+  is not evidence the channel is active. To verify it actually is, check for a
+  `session_start` line in `$CODEX_HOME/sprintable/events.jsonl` (or the
+  project-local state dir, per Configure above) after a session — its absence
+  means hooks aren't trusted yet, not that something crashed.
 - Injection primitive used here is `Stop` block/reason only. `codex exec resume`
   against an already-open interactive session is **not viable** — S1 measured it
   failing unconditionally (`thread-store conflict: ... already has an active
