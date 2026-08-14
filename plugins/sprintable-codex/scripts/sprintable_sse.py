@@ -95,6 +95,14 @@ class MessageContext:
     attachments: list[MessageAttachment]
     raw: dict[str, Any]
 
+    # story #2655 — listener.py의 on_message()가 읽는 필드. 원 이벤트에 값이 없으면
+    # 빈 문자열로 둔다(지어내지 않는다). 정본(moonklabs/sprintable
+    # connectors/sdk/sprintable_sse.py MessageContext)과 동형 계약 — 실측 근거는
+    # 아래 _parse_event의 sender.get("type")/event_type/created_at 채움부 참조.
+    sender_type: str = ""
+    event_kind: str = ""
+    ts: str = ""
+
     # reply() 지원을 위해 내부 주입
     _reply_url: str = field(default="", repr=False)
     _api_key: str = field(default="", repr=False)
@@ -277,7 +285,9 @@ class SprintableSSEClient:
             sender = {}
         sender_id = str(sender.get("id") or data.get("sender_id") or "sprintable")
         sender_name = str(sender.get("name") or sender_id)
+        sender_type = str(sender.get("type") or "")
         is_backfill = bool(data.get("is_backfill"))
+        ts = str(data.get("created_at") or payload.get("created_at") or "")
 
         reply_url = (
             f"{self._api_url}/api/v2/conversations/{conversation_id}/messages"
@@ -295,6 +305,9 @@ class SprintableSSEClient:
             images=images,
             attachments=attachments,
             raw=data,
+            sender_type=sender_type,
+            event_kind=str(event_type or ""),
+            ts=ts,
             _reply_url=reply_url,
             _api_key=self._api_key,
             _http=self._http,
@@ -347,8 +360,13 @@ class SprintableSSEClient:
                     await self._consume(on_message)
                 except asyncio.CancelledError:
                     return
-                except Exception as exc:
-                    logger.warning("stream error: %s", exc)
+                except Exception:
+                    # story #2655 — 이전엔 logger.warning(one-liner, no traceback)이라
+                    # on_message 콜백 크래시(예: AttributeError)가 평범한 네트워크 재연결
+                    # 블립과 구분 안 됐다(「조용히 no-op」 철학이 콜백 버그까지 삼킨 사고
+                    # 케이스). exception()으로 풀 traceback을 남겨 재연결 루프는 그대로
+                    # 유지하되(가용성 우선) 원인은 로그에서 즉시 식별 가능하게 한다.
+                    logger.exception("stream error")
                 if time.monotonic() - t0 >= 60.0:
                     backoff_idx = 0
                 delay = RECONNECT_BACKOFF[min(backoff_idx, len(RECONNECT_BACKOFF) - 1)]
