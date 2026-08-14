@@ -1,5 +1,22 @@
 """Sprintable Gateway SSE Reference SDK — Python.
 
+⛔story #2653(2026-08-14, 사본표류 그라운딩) — 이 파일은 정본
+moonklabs/sprintable `connectors/sdk/sprintable_sse.py`의 **vendored 사본**이다
+(발행 패키지가 monorepo 상대경로를 못 살려 복사가 불가피 — [[project_vendored_sdk_sync_debt]]와
+동형, 근본해=SDK 패키지 추출은 S9 backlog). 마지막 동기화 기준 정본 커밋:
+`ab73801b26ba6c452c8f46856558cf6b4f037092`.
+
+⛔갈리면 안 되는 계약면(#2653 그라운딩 doc `2653-triple-vendor-drift-grounding` 표 참조,
+자동가드 없음 — «정본 신필드 vs 이 사본의 의도적 축소»는 사람 리뷰 몫으로 명시 선언):
+`MessageContext.sender_type`(=`sender.get("type")`) · `.event_kind`(=`event_type`,
+data/payload) · `.ts`(=`data.get("created_at") or payload.get("created_at")`). 정본은
+`addressed`/`audience_targeted`/`message_kind`/`expects_response` 4필드도 갖지만
+(E-ACTIVATION Phase 2) 이 사본은 story #2655 스코프상 의도적으로 안 가져온다 —
+회귀 아님, 다만 "앞으로도 영원히 안 쓸 것"의 보장은 아니다.
+
+이 파일을 고칠 땐 `plugins/sprintable-grok/scripts/sprintable_sse.py`도 반드시 같이
+고칠 것 — CI `sse-copy-parity` job(story #2592/#2653)이 두 사본의 byte-diff를 강제한다.
+
 공통부: SSE 소비 · 파서 · dedup · ack(contiguous, min-1 앵커링) · backoff 재연결.
 어댑터는 `on_message` 콜백(주입부)만 구현하면 된다.
 
