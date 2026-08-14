@@ -1,0 +1,64 @@
+name: CI
+
+# story #2592 — minimal test runner: this repo had zero test execution in CI before
+# (only plugin-version-guard.yml, which checks version bumps, not code correctness).
+# Runs each plugin's pytest suite independently (codex/scripts, grok/scripts) so a
+# regression in one doesn't hide a result from the other. Kept intentionally light —
+# this is a connector repo, not the main app; no lint/type-check step is added here
+# beyond what pytest collection itself would catch (import errors surface as failures).
+#
+# Also carries a `sse-copy-parity` job (story #2592, derived from story #09e73120's
+# "declare a canonical copy" decision) — codex/grok vendor byte-identical copies of
+# `sprintable_sse.py` (no shared package between the two CLI hosts). Story #2655's
+# MessageContext fix landed correctly in both only because a human (디디) manually
+# diffed the two files before merging; nothing enforced that. This job makes that
+# check automatic and red on any divergence.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test-codex-plugin:
+    name: sprintable-codex pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Run tests
+        working-directory: plugins/sprintable-codex/scripts
+        run: uv run --with pytest --with httpx pytest -v
+
+  test-grok-plugin:
+    name: sprintable-grok pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Run tests
+        working-directory: plugins/sprintable-grok/scripts
+        run: uv run --with pytest --with httpx pytest -v
+
+  sse-copy-parity:
+    name: codex/grok sprintable_sse.py byte-diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diff the two vendored copies
+        run: |
+          set -euo pipefail
+          if ! diff -u \
+            plugins/sprintable-codex/scripts/sprintable_sse.py \
+            plugins/sprintable-grok/scripts/sprintable_sse.py
+          then
+            echo "::error::plugins/sprintable-codex/scripts/sprintable_sse.py and plugins/sprintable-grok/scripts/sprintable_sse.py have diverged. These are meant to be byte-identical vendored copies (no shared package between the two CLI hosts) — a fix landing in one without the other means the class of bug it fixes (e.g. story #2655) is still live in the other runtime. Apply the same change to both copies."
+            exit 1
+          fi
+          echo "sprintable_sse.py copies are byte-identical."
