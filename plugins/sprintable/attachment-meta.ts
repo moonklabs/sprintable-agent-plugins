@@ -1,5 +1,5 @@
 /**
- * story #2646(디디 그라운딩, 2026-08-14) — this plugin's `_onEvent()` never read
+ * story #2649(디디 그라운딩, 2026-08-14) — this plugin's `_onEvent()` never read
  * `payload.attachments` at all: the backend's `_msg_payload()` (moonklabs/sprintable,
  * app/routers/conversations.py) already carries {url, name, content_type, size,
  * asset_id, width, height} on every SSE event for a message with attachments, but

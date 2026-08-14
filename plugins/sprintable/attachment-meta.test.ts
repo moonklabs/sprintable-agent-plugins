@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { sanitizeAttachments, attachmentPlaceholderText } from './attachment-meta'
 
-describe('sanitizeAttachments (#2646)', () => {
+describe('sanitizeAttachments (#2649)', () => {
   test('maps a well-formed backend attachment object to name/type/size', () => {
     const raw = [
       { url: 'chat/p1/c1/report.pdf', name: 'report.pdf', content_type: 'application/pdf', size: 12345, asset_id: 'x' },
@@ -45,7 +45,7 @@ describe('sanitizeAttachments (#2646)', () => {
   })
 })
 
-describe('attachmentPlaceholderText (#2646)', () => {
+describe('attachmentPlaceholderText (#2649)', () => {
   test('singular for exactly one attachment', () => {
     expect(attachmentPlaceholderText([{ name: 'a', type: 't', size: 1 }])).toBe('(1 attachment)')
   })

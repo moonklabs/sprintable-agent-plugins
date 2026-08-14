@@ -346,9 +346,9 @@ setInterval(() => { if (process.ppid === 1) process.exit(0) }, 15_000).unref()
 function deliver(
   id: string,
   text: string,
-  // story #2646: 예전엔 단일-파일 `file?: {path, name}`였으나 실 호출부가 항상 undefined만
+  // story #2649: 예전엔 단일-파일 `file?: {path, name}`였으나 실 호출부가 항상 undefined만
   // 넘겨 사실상 죽은 파라미터였다(inboundMeta Map이 write-only였던 것과 동형 패턴,
-  // #2622/#2646 그라운딩 둘 다 같은 클래스 발견). attachments는 배열이라 이 자리를 그대로
+  // #2622/#2649 그라운딩 둘 다 같은 클래스 발견). attachments는 배열이라 이 자리를 그대로
   // 재사용 — 첨부 개수·이름·타입·크기만 노출(다운로드 경로는 별도 백엔드 갭, story
   // f953720d — 여기선 만들지 않는다).
   attachments?: AttachmentMeta[],
@@ -385,7 +385,7 @@ function deliver(
         message_id: id,
         user: meta?.user ?? 'sprintable',
         ts: new Date().toISOString(),
-        // story #2646: Discord 채널 플러그인과 동형 관례(attachment_count + attachments
+        // story #2649: Discord 채널 플러그인과 동형 관례(attachment_count + attachments
         // name/type/size) — 다운로드 도구는 없으므로 url은 의도적으로 안 싣는다(신호 없는
         // 경로 노출 방지, story f953720d 해소 전엔 어차피 못 쓴다).
         ...(attachments && attachments.length > 0
@@ -473,10 +473,12 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
   }
 
   const content = ((data.content ?? payload.content ?? '') as string).trim()
-  // story #2646: 백엔드 _msg_payload()가 이미 payload.attachments를 싣는데 이 서버는 여태
+  // story #2649: 백엔드 _msg_payload()가 이미 payload.attachments를 싣는데 이 서버는 여태
   // 전혀 안 읽었다 — content만 봐서 "첨부만 있고 텍스트 없는" 메시지가 아래 빈-content
-  // 분기에서 통째로 드롭됐다(안 보일 것=0건 취급이었으나 실제론 첨부가 있었다).
-  const attachments = sanitizeAttachments(payload.attachments)
+  // 분기에서 통째로 드롭됐다(안 보일 것=0건 취급이었으나 실제론 첨부가 있었다). content·
+  // recipient_seq와 동형으로 data 최상위 우선 → payload 폴백(top-level shape 이벤트에
+  // 첨부가 실리는 경우도 닫는다 — 이 파일의 기존 관례 그대로 미러, Pedro QA).
+  const attachments = sanitizeAttachments(data.attachments ?? payload.attachments)
   if (!content && attachments.length === 0) {
     // #2375 AC5 — 내용도 첨부도 없는 injectable 이벤트는 "전달 실패"가 아니라 "보일 것
     // 없음"이다. 예전엔 여기서 ack 없이 return해 seq가 영원히 미확인으로 남았다 — 재연결마다
@@ -561,7 +563,7 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
 
   // story #2583 — 발신자/이벤트종류/ts를 표준 envelope로 렌더해 실음(content만 넘기면
   // 모델이 발신자를 모른 채 진행 — 댄 어윈 오호칭 사고와 동일 코드 경로였다).
-  // story #2646: content가 비어도(첨부만 있는 메시지) envelope 본문이 완전히 텅 비지
+  // story #2649: content가 비어도(첨부만 있는 메시지) envelope 본문이 완전히 텅 비지
   // 않게 표시용 문구로 채운다 — 위 allow/deny 매칭·로그는 원본 content(빈 문자열 포함)를
   // 그대로 쓰고, 이 치환은 여기 렌더링 시점에만 적용한다.
   const displayContent = content || attachmentPlaceholderText(attachments)
