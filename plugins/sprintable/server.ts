@@ -19,6 +19,7 @@ import {
 import { isInjectableEventType } from './inject-allowlist'
 import { formatEnvelopeText } from './envelope'
 import { currentConversationFilename } from './conversation-routing'
+import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, dirname } from 'path'
@@ -126,12 +127,13 @@ const API_KEY = (process.env.SPRINTABLE_API_KEY ?? process.env.AGENT_API_KEY ?? 
 // HAS_WEBHOOK="true"(launch env) → SSE 안 엶. webhook 없으면(오스카 등) on. harmless safety.
 const HAS_WEBHOOK = (process.env.HAS_WEBHOOK ?? '').toLowerCase() === 'true'
 
-type InboundMeta = {
-  threadId: string
-  replyCallbackUrl: string
-  replyCallbackApiKey: string
-}
-
+// story #2622(2026-08-14): reply()가 명시 chat_id로 정확한 대화를 지목할 수 있게 — 이전엔
+// 이 Map이 채워지기만 하고(write-only) reply 핸들러는 latestInboundMeta(전역 단일값,
+// last-write-wins)만 읽어 교차 채널 오배송을 냈다(카디르 06:24~06:36 PO채널 의도 4건이
+// 그 사이 도착한 선생님채널 이벤트에 밀려 선생님채널로 오배송된 실피해). key는 모델이
+// <channel chat_id="..."> 태그에서 보는 바로 그 값(=conversationId/thread_id) — reply가
+// "그 chat_id 그대로 돌려주면" 조회되게. 조회/청소 로직은 reply-target.ts(단위테스트 가능한
+// 순수 함수 — 이 파일은 mcp.connect()를 모듈 스코프 부수효과로 실행해 직접 테스트 불가).
 const inboundMeta = new Map<string, InboundMeta>()
 let latestInboundMeta: InboundMeta | undefined
 
@@ -154,10 +156,22 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'reply',
       description:
-        'POST /api/v2/conversations/{id}/messages. Requires an active conversation.',
+        'POST /api/v2/conversations/{id}/messages. Requires an active conversation. ' +
+        'If multiple channels may be active concurrently, pass chat_id (the exact value ' +
+        'from the <channel chat_id="..."> tag you are replying to) to target that ' +
+        'conversation explicitly — otherwise this defaults to the most recently received ' +
+        'conversation, which can misroute if another channel message arrives in between.',
       inputSchema: {
         type: 'object',
-        properties: { text: { type: 'string' } },
+        properties: {
+          text: { type: 'string' },
+          chat_id: {
+            type: 'string',
+            description:
+              'Optional. Echo back the chat_id attribute from the inbound <channel> tag to ' +
+              'target that exact conversation, regardless of which channel most recently sent a message.',
+          },
+        },
         required: ['text'],
       },
     },
@@ -262,8 +276,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     switch (req.params.name) {
       case 'reply': {
         const text = args.text as string
-        const meta = latestInboundMeta
-        if (!meta?.replyCallbackUrl) throw new Error('no active conversation')
+        const chatId = args.chat_id as string | undefined
+        const target = resolveReplyTarget(inboundMeta, latestInboundMeta, chatId)
+        if (!target.ok) throw new Error(target.error)
+        const meta = target.meta
         const resp = await fetch(meta.replyCallbackUrl, {
           method: 'POST',
           headers: {
@@ -340,9 +356,14 @@ function deliver(
       threadId: meta.thread_id,
       replyCallbackUrl: meta.reply_callback_url,
       replyCallbackApiKey: meta.reply_callback_api_key,
+      ts: Date.now(),
     }
-    inboundMeta.set(id, m)
+    // story #2622: key = thread_id(== 아래 notification의 chat_id 속성과 동일 값) — reply의
+    // chat_id 파라미터가 이 값을 그대로 되돌려주는 형태이므로, message id가 아니라 대화
+    // 단위로 조회 가능해야 한다(한 대화에서 새 메시지가 올 때마다 최신 콜백으로 갱신).
+    inboundMeta.set(meta.thread_id, m)
     latestInboundMeta = m
+    pruneInboundMeta(inboundMeta)
   }
 
   void mcp.notification({
