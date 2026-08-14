@@ -19,8 +19,10 @@ import {
 import { isInjectableEventType } from './inject-allowlist'
 import { formatEnvelopeText } from './envelope'
 import { currentConversationFilename } from './conversation-routing'
+import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
+import { buildChannelNotificationMeta } from './channel-notification-meta'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, dirname } from 'path'
@@ -143,7 +145,11 @@ let latestInboundMeta: InboundMeta | undefined
 const mcp = new Server(
   // #2577: 프로토콜 레벨 serverInfo.name도 .mcp.json 키(sprintable-channel)와 맞춤 —
   // hosted 도구 MCP(sprintable-mcp)와 로그·핸드셰이크 레벨에서도 분간되게.
-  { name: 'sprintable-channel', version: '0.2.0' },
+  // story #3c7968ee(2026-08-14, PO 지적): version은 예전에 '0.2.0' 리터럴로 박혀
+  // plugin.json이 0.3.0→0.3.1→0.3.2로 범프되는 동안 계속 드리프트했다(핸드셰이크 로그가
+  // 실 배포 버전과 다른 값을 말하는 관측성 함정). plugin.json을 SSOT로 import — 다음 범프부터
+  // 다시 갈릴 일이 구조적으로 없다(리터럴 재동기화가 아니라 드리프트 원천 차단).
+  { name: 'sprintable-channel', version: pluginManifest.version },
   {
     capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
     instructions:
@@ -380,19 +386,12 @@ function deliver(
     method: 'notifications/claude/channel',
     params: {
       content: text,
-      meta: {
-        chat_id: meta?.thread_id ?? 'sprintable',
-        message_id: id,
-        user: meta?.user ?? 'sprintable',
-        ts: new Date().toISOString(),
-        // story #2649: Discord 채널 플러그인과 동형 관례(attachment_count + attachments
-        // name/type/size) — 다운로드 도구는 없으므로 url은 의도적으로 안 싣는다(신호 없는
-        // 경로 노출 방지, story f953720d 해소 전엔 어차피 못 쓴다).
-        ...(attachments && attachments.length > 0
-          ? { attachment_count: attachments.length, attachments }
-          : {}),
-        ...(meta?.thread_id ? { thread_id: meta.thread_id } : {}),
-      },
+      // story #2649/#3c7968ee: attachment_count/attachments 포함 — 메타 값 전부 문자열
+      // 직렬화는 buildChannelNotificationMeta가 전담(하니스 string-only 계약, 위반 시
+      // ProtocolError로 STDIO 알림 자체가 드롭됐던 실피해).
+      meta: buildChannelNotificationMeta({
+        threadId: meta?.thread_id, messageId: id, user: meta?.user, attachments,
+      }),
     },
   })
 }
