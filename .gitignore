@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# story #3292 — bun install (needed to bundle-check server.ts locally) left node_modules/
+# untracked-but-not-ignored; this repo had zero rule for it before now.
+node_modules/

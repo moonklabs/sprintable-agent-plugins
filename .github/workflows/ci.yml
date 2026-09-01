@@ -21,6 +21,24 @@ on:
     branches: [main]
 
 jobs:
+  test-sprintable-plugin:
+    # story #3292([M1·마케팅자동화] 발행 커넥터) — plugins/sprintable(Claude Code/Bun-TS
+    # plugin)이 이 워크플로우에 이전에 전혀 안 걸려 있었다(codex/grok pytest 두 잡만 있었음,
+    # 위 상단 주석 "minimal test runner" 참고). 이 스토리의 chokepoint 뮤테이션 pin
+    # (connectors/stibee.test.ts·gate-check.test.ts)이 실제로 CI에서 강제되려면 이 잡이
+    # 있어야 한다 — 로컬 실행만으론 미래의 실수(예: assertGateApproved 호출 삭제)를 CI가
+    # 못 잡는다. 착수 전 실측(2026-09-01): 이 잡 추가 전에도 기존 7개 파일 43/43 pass —
+    # 안전하게 얹을 수 있는 상태였다.
+    name: sprintable plugin bun test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Run tests
+        working-directory: plugins/sprintable
+        run: bun test
+
   test-codex-plugin:
     name: sprintable-codex pytest
     runs-on: ubuntu-latest
