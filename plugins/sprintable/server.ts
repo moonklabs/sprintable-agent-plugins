@@ -23,6 +23,12 @@ import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta } from './channel-notification-meta'
+import {
+  publishStibeeCampaign,
+  type CreateEmailRequest,
+  type UpdateEmailRequest,
+} from './connectors/stibee'
+import { GateNotApprovedError } from './connectors/gate-check'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, dirname } from 'path'
@@ -219,6 +225,53 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['tool_name', 'input'],
       },
     },
+    {
+      // story #3292([M1·마케팅자동화] 발행 커넥터) — doc stibee-publish-connector-wiring-
+      // design-3292. gate_id는 external_publish 게이트(link_gate_to_task reason=
+      // "external_publish"로 이 발행 task에 이미 묶여 있어야 함) — 이 도구를 호출하는 것
+      // 자체는 승인의 증거가 아니다: 내부에서 GET /api/v2/gates/{gate_id}로 gate.status를
+      // 재확인하고, approved/auto_passed가 아니면 실제 Stibee 발송(POST /send)을 절대
+      // 호출하지 않는다(defense-in-depth — 이 호출을 승인 신호로 믿지 않는다).
+      // ⚠️STIBEE_ACCESS_TOKEN 미설정이면 즉시 에러(/sprintable:configure-stibee 안내).
+      name: 'publish_stibee_campaign',
+      description:
+        'Publish an email campaign via Stibee (create draft → set HTML content → optional ' +
+        'metadata update → send), gated on an approved external_publish Gate. The send call ' +
+        'is blocked unless GET /api/v2/gates/{gate_id} reports status approved or auto_passed ' +
+        '— calling this tool does not itself authorize the send.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          gate_id: {
+            type: 'string',
+            description: 'The external_publish Gate id this publish task is linked to.',
+          },
+          create: {
+            type: 'object',
+            description: 'Stibee POST /v2/emails body.',
+            properties: {
+              listId: { type: 'number' },
+              senderEmail: { type: 'string' },
+              senderName: { type: 'string' },
+              subject: { type: 'string' },
+              groupIds: { type: 'array', items: { type: 'number' } },
+              segmentIds: { type: 'array', items: { type: 'number' } },
+            },
+            required: ['listId', 'senderEmail', 'senderName', 'subject'],
+          },
+          html: {
+            type: 'string',
+            description: 'Email body HTML — sent verbatim to POST /v2/emails/{id}/content.',
+          },
+          update: {
+            type: 'object',
+            description: 'Optional Stibee PUT /v2/emails/{id} body (metadata overrides).',
+          },
+        },
+        required: ['gate_id', 'create', 'html'],
+        additionalProperties: false,
+      },
+    },
   ],
 }))
 
@@ -319,6 +372,35 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             ? { behavior: 'allow', updatedInput: toolInput }
             : { behavior: 'deny', message: decision.message ?? '거부됨' }
         return { content: [{ type: 'text', text: JSON.stringify(behaviorPayload) }] }
+      }
+      case 'publish_stibee_campaign': {
+        const stibeeToken = (process.env.STIBEE_ACCESS_TOKEN ?? '').trim()
+        if (!stibeeToken) {
+          throw new Error(
+            'STIBEE_ACCESS_TOKEN not configured — run /sprintable:configure-stibee <access-token> first',
+          )
+        }
+        const gateId = String(args.gate_id ?? '')
+        if (!gateId) throw new Error('gate_id is required')
+        const create = args.create as CreateEmailRequest
+        const html = String(args.html ?? '')
+        const update = args.update as UpdateEmailRequest | undefined
+        try {
+          const result = await publishStibeeCampaign({
+            gateId,
+            content: { create, html, update },
+            sprintableApiUrl: API_URL,
+            sprintableApiKey: API_KEY,
+            stibee: { accessToken: stibeeToken },
+          })
+          logEvent('stibee_publish_sent', { gate_id: gateId, email_id: result.emailId })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof GateNotApprovedError) {
+            logEvent('stibee_publish_blocked', { gate_id: gateId, gate_status: err.gateStatus })
+          }
+          throw err
+        }
       }
       default:
         return {

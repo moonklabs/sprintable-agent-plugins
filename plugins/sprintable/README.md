@@ -44,6 +44,35 @@ Both paths:
 
 Env vars: `SPRINTABLE_HITL_APPROVAL` (Path B opt-in), `SPRINTABLE_HITL_HOME_CHANNEL`, `SPRINTABLE_HITL_APPROVERS`, `SPRINTABLE_HITL_TIMEOUT_MS`.
 
+## Marketing publish connector — Stibee (#3292, M1)
+
+`connectors/stibee.ts` — the first "발행 커넥터" (external channel publish connector) in
+this repo, built for [M1·마케팅자동화]. Design: doc `stibee-publish-connector-wiring-
+design-3292`.
+
+```
+/sprintable:configure-stibee <access-token>    # writes STIBEE_ACCESS_TOKEN to the same .env
+```
+
+The `publish_stibee_campaign` MCP tool runs a 4-call Stibee v2 sequence — `POST /v2/emails`
+(create draft) → `POST /v2/emails/{id}/content` (HTML body, `text/html` raw) → optional
+`PUT /v2/emails/{id}` (metadata) → `POST /v2/emails/{id}/send`. **The `send` call is
+gated**: `connectors/gate-check.ts::assertGateApproved()` calls `GET /api/v2/gates/{gate_id}`
+immediately before it and throws `GateNotApprovedError` unless `gate.status` is `approved`
+or `auto_passed` — draft prep (create/content/update) is not gated, only the irreversible
+last step. Calling the tool is not itself authorization; the external_publish Gate
+(#3689, always-manual regardless of org posture) is the actual chokepoint, re-checked
+every call rather than trusted from whatever triggered the call (SSE notification, task
+state, etc. — signal, not proof). Pinned with a mutation test (`connectors/stibee.test.ts`):
+delete the `assertGateApproved` call and the "send never fires on pending/rejected" tests
+go red.
+
+M1 scope: dev/e2e is sandbox or a company test account only — real-account sends are M3,
+gated on a separate human approval. Credentials are local-`.env` (same file as
+`SPRINTABLE_API_KEY`, PO-confirmed sufficient for the single-workspace M1 dogfood);
+server-side per-org secrets are an M2+ concern if/when other orgs BYOA their own Stibee
+account.
+
 ## Remaining S2 work (build)
 
 1. **`.env` loader** in `server.ts` — port telegram's pattern (load `~/.claude/channels/sprintable/.env` into `process.env`; real env wins).
