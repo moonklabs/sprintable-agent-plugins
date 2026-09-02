@@ -124,17 +124,55 @@ M1 scope: dev is a mock-server dry run (`bun test`) plus explicit errors when
 separate, explicitly confirmed step once credentials exist; real sends beyond that are M3,
 gated on human approval same as Stibee.
 
+## Marketing publish connector — Instagram (story a98dfbea, M4, wiring only)
+
+`connectors/instagram.ts` — the third 발행 커넥터, the second "A-path" channel alongside
+Threads (started once M3 Threads real-publish is live; prerequisites: an IG business account
+connected to a Facebook Page, plus a draft-stage media-asset procedure — neither exists yet,
+so **this is wiring only**: connector schema, `describe_connector`, the publish tool, both
+chokepoints, and mock-server tests. No real account, no real send, and no rate-limit check
+(see below)).
+
+Reuses the same Meta developer app registration as Threads (story a98dfbea's premise) — but
+Instagram Graph API (`graph.facebook.com`, Facebook Login / Page-connected variant) is a
+**different host and a different auth path** than Threads' own API (`graph.threads.net`):
+the Instagram professional account must be connected to a Facebook Page, and calls use that
+Page's access token, not an Instagram user token (developers.facebook.com/docs/instagram-api/
+guides/content-publishing, confirmed live, not assumed). What's actually shared is the Meta
+app registration, nothing about the request shape.
+
+Two calls — `POST /<IG_ID>/media` (create container, `image_url` required — **Instagram does
+not support text-only posts**, `caption` optional) → `POST /<IG_ID>/media_publish`
+(`creation_id`) → published media id. Same two-chokepoint shape as Threads/Stibee (see
+"Common contract" below) from day one — chokepoint ① (before container creation) and ②
+(before `media_publish`), both pinned by independent mutation tests
+(`connectors/instagram.test.ts`).
+
+Deliberately **not** wired: `content_publishing_limit` (the 24h/100-post rate limit endpoint).
+Its existence is confirmed in the docs, but no example response body could be found there
+(unlike Threads' `threads_publishing_limit`, which does show one) — this codebase's rule is
+not to write a parser for a shape that hasn't actually been observed. Add it once a real
+account can make one call and the response gets captured.
+
+```
+INSTAGRAM_ACCESS_TOKEN=<page-access-token>
+INSTAGRAM_USER_ID=<ig-business-account-id>
+```
+(no `configure-instagram` skill yet — out of this story's wiring scope; env is set by hand
+for now, same shape as `configure-threads`/`configure-stibee` will eventually cover.)
+
 ### Common contract for all publish connectors (story 6f2034cf)
 
-Every connector wired to an `external_publish` gate — Stibee, Threads, and any future
-channel — follows the same two-chokepoint shape, not a per-connector judgment call:
+Every connector wired to an `external_publish` gate — Stibee, Threads, Instagram, and any
+future channel — follows the same two-chokepoint shape, not a per-connector judgment call:
 
 1. **Chokepoint ① fires before the first external write**, not after some subset of calls
    deemed "prep." There is no such thing as a write that "doesn't count" because it's early
    in the sequence or stays inside the target platform's own account — the moment any call
    leaves the process and reaches the external service, it needs the gate to already be
    approved. (Stibee's original design got this wrong: `create`/`content`/`update` were
-   treated as ungated "draft prep" until story 6f2034cf's fix — see above.)
+   treated as ungated "draft prep" until story 6f2034cf's fix — see above. Instagram never
+   made that mistake — it follows the contract from day one.)
 2. **Chokepoint ② re-checks immediately before the last, irreversible call** (send / publish),
    independently of ①, to catch approval being revoked in the window between the two.
 3. Both chokepoints call the same `connectors/gate-check.ts` functions
