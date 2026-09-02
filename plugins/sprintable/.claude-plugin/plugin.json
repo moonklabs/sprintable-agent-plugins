@@ -1,7 +1,7 @@
 {
   "name": "sprintable",
   "description": "Sprintable channel for Claude Code — pushes Agent Gateway events (SSE) into your session and replies back. Configure with /sprintable:configure.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "author": { "name": "moonklabs" },
   "keywords": ["sprintable", "channel", "mcp", "agent", "sse"]
 }
