@@ -33,7 +33,7 @@ function gateCheckSpy(status: string) {
 /** work_item 경로(AC5) 전용 — gate-check.ts::resolveLatestGate가 기대하는 배열 응답. */
 function gateCheckListSpy(status: string | null) {
   return (async () =>
-    new Response(JSON.stringify(status === null ? [] : [{ id: 'gate-wi-1', status, work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+    new Response(JSON.stringify(status === null ? [] : [{ id: 'gate-wi-1', status, gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
   ) as unknown as typeof fetch
 }
 

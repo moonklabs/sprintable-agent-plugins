@@ -57,7 +57,7 @@ function threadsConfig(fetchImpl: typeof fetch, overrides: { accessToken?: strin
 /** work_item 경로(AC5) 전용 — gate-check.ts::resolveLatestGate가 기대하는 배열 응답. */
 function gateCheckListSpy(status: string | null) {
   return (async () =>
-    new Response(JSON.stringify(status === null ? [] : [{ id: 'gate-wi-1', status, work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+    new Response(JSON.stringify(status === null ? [] : [{ id: 'gate-wi-1', status, gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
   ) as unknown as typeof fetch
 }
 
@@ -319,7 +319,7 @@ describe('publishThreadsPost — work_item 경로(#3312 AC5, gate_id 없이 조�
     const gateCheckFetchImpl = (async () => {
       call += 1
       const status = call === 1 ? 'approved' : 'rejected'
-      return new Response(JSON.stringify([{ id: 'gate-wi-1', status, work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+      return new Response(JSON.stringify([{ id: 'gate-wi-1', status, gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
     }) as unknown as typeof fetch
 
     await expect(

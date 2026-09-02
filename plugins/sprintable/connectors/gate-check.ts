@@ -70,6 +70,7 @@ export async function assertGateApproved(
 export interface GateSummary {
   id: string
   status: string
+  gateType: string
   designatedApproverId?: string | null
   workItemId: string
   workItemType: string
@@ -78,9 +79,29 @@ export interface GateSummary {
 interface GateListResponseEntry {
   id: string
   status: string
+  gate_type: string
   designated_approver_id?: string | null
   work_item_id: string
   work_item_type: string
+}
+
+/** story #3312 PR#30 PO 리뷰(방어 정정) — 서버가 쿼리 필터를 조용히 무시해도(story #2864가
+ * 실제로 그랬던 클래스) 이 함수가 그걸 발행 승인으로 오독하면 안 된다. 응답 첫 건의
+ * gate_type/work_item_id/work_item_type이 요청값과 다르면 fail-closed. */
+export class GateFilterMismatchError extends Error {
+  constructor(
+    public readonly requested: { workItemId: string; workItemType: string; gateType: string },
+    public readonly received: { workItemId: string; workItemType: string; gateType: string },
+  ) {
+    super(
+      'gate list response entry does not match the requested filter — requested ' +
+        `work_item_id=${requested.workItemId} work_item_type=${requested.workItemType} ` +
+        `gate_type=${requested.gateType}, received work_item_id=${received.workItemId} ` +
+        `work_item_type=${received.workItemType} gate_type=${received.gateType} ` +
+        '(defense against the server silently ignoring filters — story #2864 class of bug)',
+    )
+    this.name = 'GateFilterMismatchError'
+  }
 }
 
 /**
@@ -91,6 +112,13 @@ interface GateListResponseEntry {
  * "최신"을 보장 못 함, 그래서 이 조회는 항상 `limit=1`을 붙인다). 0건이면 approve 단계가
  * 아직 안 돈 것 — NoGateFoundError(명시, 조용한 통과 금지). org 스코프 밖 work_item_id는
  * 서버가 404(존재 비노출 관례)를 주며 이 함수는 그것도 일반 조회 실패로 그대로 throw한다.
+ *
+ * ⚠️PO 리뷰 정정(PR#30) — 응답 첫 건이 "요청과 같은 필터"라고 서버를 맹신하지 않는다.
+ * story #2864(GET /api/v2/gates가 gate_type·limit을 침묵 무시하던 실사고 — 지금은 fix
+ * 됐지만 재발 시 이 함수가 그 첫 신호원)와 같은 클래스가 다시 나면, 이 함수가 "같은
+ * work item의 다른 gate_type 게이트(예: merge, approved)"를 external_publish 승인으로
+ * 오독해 발행을 열어줄 수 있는 자리라 — 응답 건의 실 필드를 요청값과 대조해 다르면
+ * GateFilterMismatchError로 fail-closed(조용한 통과 금지).
  */
 export async function resolveLatestGate(
   workItemId: string,
@@ -119,9 +147,24 @@ export async function resolveLatestGate(
     throw new NoGateFoundError(workItemId, gateType)
   }
   const gate = gates[0] // limit=1 + 서버 정렬(created_at desc) — 이미 "최신 1건".
+
+  // ⭐fail-closed 대조(PR#30 PO 리뷰) — 지우면(뮤테이션) 서버가 필터를 무시해도 발행이
+  // 그대로 나가야 정상: gate-check.test.ts가 그 갈림을 pin한다.
+  if (
+    gate.work_item_id !== workItemId ||
+    gate.work_item_type !== workItemType ||
+    gate.gate_type !== gateType
+  ) {
+    throw new GateFilterMismatchError(
+      { workItemId, workItemType, gateType },
+      { workItemId: gate.work_item_id, workItemType: gate.work_item_type, gateType: gate.gate_type },
+    )
+  }
+
   return {
     id: gate.id,
     status: gate.status,
+    gateType: gate.gate_type,
     designatedApproverId: gate.designated_approver_id,
     workItemId: gate.work_item_id,
     workItemType: gate.work_item_type,
