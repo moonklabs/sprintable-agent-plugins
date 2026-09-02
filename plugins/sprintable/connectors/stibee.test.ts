@@ -6,7 +6,7 @@
  */
 import { describe, test, expect } from 'bun:test'
 import { publishStibeeCampaign, type StibeeCampaignContent } from './stibee'
-import { GateNotApprovedError } from './gate-check'
+import { GateNotApprovedError, NoGateFoundError } from './gate-check'
 
 const CONTENT: StibeeCampaignContent = {
   create: { listId: 1, senderEmail: 'a@b.com', senderName: 'Sprintable', subject: 'hi' },
@@ -28,6 +28,13 @@ function stibeeSpy() {
 
 function gateCheckSpy(status: string) {
   return (async () => new Response(JSON.stringify({ status }), { status: 200 })) as unknown as typeof fetch
+}
+
+/** work_item 경로(AC5) 전용 — gate-check.ts::resolveLatestGate가 기대하는 배열 응답. */
+function gateCheckListSpy(status: string | null) {
+  return (async () =>
+    new Response(JSON.stringify(status === null ? [] : [{ id: 'gate-wi-1', status, gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+  ) as unknown as typeof fetch
 }
 
 describe('publishStibeeCampaign — chokepoint end-to-end (#3292)', () => {
@@ -143,5 +150,75 @@ describe('publishStibeeCampaign — chokepoint end-to-end (#3292)', () => {
 
     expect(sendInit?.body).toBeUndefined()
     expect(sendInit?.headers).toMatchObject({ AccessToken: 'my-stibee-token' })
+  })
+})
+
+describe('publishStibeeCampaign — work_item 경로(#3312 AC5, gate_id 없이 조회)', () => {
+  test('gateId 없이 workItemId만 줘도 approved면 send가 나간다', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    const result = await publishStibeeCampaign({
+      workItemId: 'wi-1', content: CONTENT,
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      stibee: { accessToken: 'stibee-token', fetchImpl },
+      gateCheckFetchImpl: gateCheckListSpy('approved'),
+    })
+    expect(result.emailId).toBe(42)
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/42/send'))).toHaveLength(1)
+  })
+
+  test('workItemId 경로 — pending이면 send는 0회(draft 준비는 진행)', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    await expect(
+      publishStibeeCampaign({
+        workItemId: 'wi-1', content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+        gateCheckFetchImpl: gateCheckListSpy('pending'),
+      }),
+    ).rejects.toThrow(GateNotApprovedError)
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/send'))).toHaveLength(0)
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/emails'))).toBe(true)
+  })
+
+  test('⭐게이트 0건(approve 단계 미발생) — NoGateFoundError, send 0건', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    await expect(
+      publishStibeeCampaign({
+        workItemId: 'wi-1', content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+        gateCheckFetchImpl: gateCheckListSpy(null),
+      }),
+    ).rejects.toThrow(NoGateFoundError)
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/send'))).toHaveLength(0)
+  })
+
+  test('⭐gateId도 workItemId도 없으면 즉시 명시 에러 — draft 준비도 시작 안 함(호출 0건)', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    await expect(
+      publishStibeeCampaign({
+        content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+      }),
+    ).rejects.toThrow('requires either gateId or workItemId')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('gateId와 workItemId 둘 다 있으면 gateId(명시 경로)가 우선한다', async () => {
+    const gateCheckFetchImpl = (async (url: string) => {
+      expect(url).toContain('/api/v2/gates/gate-explicit')
+      return new Response(JSON.stringify({ status: 'approved' }), { status: 200 })
+    }) as unknown as typeof fetch
+    const { fetchImpl } = stibeeSpy()
+
+    const result = await publishStibeeCampaign({
+      gateId: 'gate-explicit', workItemId: 'wi-should-be-ignored', content: CONTENT,
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      stibee: { accessToken: 'stibee-token', fetchImpl },
+      gateCheckFetchImpl,
+    })
+
+    expect(result.emailId).toBe(42)
   })
 })

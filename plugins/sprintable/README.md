@@ -118,6 +118,22 @@ M1 scope: dev is a mock-server dry run (`bun test`) plus explicit errors when
 separate, explicitly confirmed step once credentials exist; real sends beyond that are M3,
 gated on human approval same as Stibee.
 
+### Gate resolution without a gate_id (#3312 AC5)
+
+Both `publish_stibee_campaign` and `publish_threads_post` accept `gate_id` explicitly, or
+`work_item` (+ optional `work_item_type`, default `story`) instead — for the recipe
+automation loop, which doesn't know a gate id up front, only the work item its approve
+stage just gated. `connectors/gate-check.ts::assertGateApprovedForWorkItem()` resolves it:
+`GET /api/v2/gates?work_item_id=&work_item_type=&gate_type=external_publish&limit=1`
+(no new route — existing endpoint, contract confirmed against backend PR#3704 "커넥터용
+조회 계약" and the actual `list_gates` source; `limit=1` is required to get
+`created_at desc` ordering at all — story #2864's fix only sorts when `limit`/`offset` is
+present, so a bare filtered query is unordered). Zero results means the approve stage
+hasn't created a gate yet — `NoGateFoundError`, distinct from `GateNotApprovedError`
+(gate exists, just not approved). `gate_id` wins when both are given. Same two-round-trip
+savings as the explicit path: the list response already carries `status`, so no follow-up
+`GET /api/v2/gates/{id}` call is needed.
+
 Applying this (or any) recipe to a project happens in **프로젝트 설정 → 워크플로우
 갤러리**, not from the event-definition catalog (`/organization/events`) itself — that
 gallery→apply gap for non-developer users is tracked separately in story #3316.

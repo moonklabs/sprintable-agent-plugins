@@ -13,7 +13,7 @@ import {
   ThreadsRateLimitExceededError,
   ThreadsTextTooLongError,
 } from './threads'
-import { GateNotApprovedError } from './gate-check'
+import { GateNotApprovedError, NoGateFoundError } from './gate-check'
 
 const OK_LIMIT = { data: [{ quota_usage: 10, config: { quota_total: 250 } }] }
 
@@ -52,6 +52,13 @@ function gateCheckSequenceSpy(statuses: string[]) {
 
 function threadsConfig(fetchImpl: typeof fetch, overrides: { accessToken?: string; userId?: string } = {}) {
   return { accessToken: overrides.accessToken ?? 'threads-token', userId: overrides.userId ?? '17841400000000000', fetchImpl }
+}
+
+/** work_item 경로(AC5) 전용 — gate-check.ts::resolveLatestGate가 기대하는 배열 응답. */
+function gateCheckListSpy(status: string | null) {
+  return (async () =>
+    new Response(JSON.stringify(status === null ? [] : [{ id: 'gate-wi-1', status, gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+  ) as unknown as typeof fetch
 }
 
 describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
@@ -230,6 +237,102 @@ describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
     // 서로의 계정으로는 절대 안 나간다 — org 상수가 코드에 없다는 직접 증거.
     expect(orgA.calls.some((c) => c.url.includes('org-b-user-id'))).toBe(false)
     expect(orgB.calls.some((c) => c.url.includes('org-a-user-id'))).toBe(false)
+  })
+})
+
+describe('publishThreadsPost — work_item 경로(#3312 AC5, gate_id 없이 조회)', () => {
+  test('gateId 없이 workItemId만 줘도 approved면 게시가 나간다', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    const result = await publishThreadsPost({
+      workItemId: 'wi-1', text: 'hello via work item',
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      threads: threadsConfig(fetchImpl),
+      gateCheckFetchImpl: gateCheckListSpy('approved'),
+    })
+    expect(result.postId).toBe('post-99')
+    expect(calls.filter((c) => c.url.includes('/threads_publish?'))).toHaveLength(1)
+  })
+
+  test('workItemId 경로 — pending이면 Meta로 단 하나의 요청도 안 나간다', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    await expect(
+      publishThreadsPost({
+        workItemId: 'wi-1', text: 'hello via work item',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckListSpy('pending'),
+      }),
+    ).rejects.toThrow(GateNotApprovedError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('⭐게이트 0건(approve 단계 미발생) — NoGateFoundError, Meta 호출 0건', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    await expect(
+      publishThreadsPost({
+        workItemId: 'wi-1', text: 'hello via work item',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckListSpy(null),
+      }),
+    ).rejects.toThrow(NoGateFoundError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('gateId와 workItemId 둘 다 있으면 gateId(명시 경로)가 우선한다', async () => {
+    let gateCheckCalls = 0
+    const gateCheckFetchImpl = (async (url: string) => {
+      gateCheckCalls += 1
+      // 명시 경로(assertGateApproved)는 /gates/{id} 단건 GET — 배열이 아닌 단일 객체 응답을
+      // 기대한다. work_item 경로였다면 이 스파이가 배열이 아닌 값을 못 파싱해 에러가 났을 것.
+      expect(url).toContain('/api/v2/gates/gate-explicit')
+      return new Response(JSON.stringify({ status: 'approved' }), { status: 200 })
+    }) as unknown as typeof fetch
+    const { fetchImpl } = threadsSpy()
+
+    const result = await publishThreadsPost({
+      gateId: 'gate-explicit', workItemId: 'wi-should-be-ignored', text: 'explicit wins',
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      threads: threadsConfig(fetchImpl),
+      gateCheckFetchImpl,
+    })
+
+    expect(result.postId).toBe('post-99')
+    expect(gateCheckCalls).toBe(2) // 두 chokepoint 각각 1회
+  })
+
+  test('⭐gateId도 workItemId도 없으면 즉시 명시 에러 — 네트워크 호출 0건', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    await expect(
+      publishThreadsPost({
+        text: 'no gate reference at all',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+      }),
+    ).rejects.toThrow('requires either gateId or workItemId')
+    expect(calls).toHaveLength(0)
+  })
+
+  test('레이스 방어 — work_item 경로도 ①과 ② 사이 철회를 잡는다(매번 새로 조회)', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    let call = 0
+    const gateCheckFetchImpl = (async () => {
+      call += 1
+      const status = call === 1 ? 'approved' : 'rejected'
+      return new Response(JSON.stringify([{ id: 'gate-wi-1', status, gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      publishThreadsPost({
+        workItemId: 'wi-1', text: 'hello via work item',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl,
+      }),
+    ).rejects.toThrow(GateNotApprovedError)
+    expect(calls.some((c) => c.url.includes('/threads_publishing_limit'))).toBe(true)
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads?'))).toBe(true)
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads_publish?'))).toBe(false)
   })
 })
 

@@ -29,7 +29,7 @@ import {
   type UpdateEmailRequest,
 } from './connectors/stibee'
 import { publishThreadsPost } from './connectors/threads'
-import { GateNotApprovedError } from './connectors/gate-check'
+import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, dirname } from 'path'
@@ -234,18 +234,35 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       // 재확인하고, approved/auto_passed가 아니면 실제 Stibee 발송(POST /send)을 절대
       // 호출하지 않는다(defense-in-depth — 이 호출을 승인 신호로 믿지 않는다).
       // ⚠️STIBEE_ACCESS_TOKEN 미설정이면 즉시 에러(/sprintable:configure-stibee 안내).
+      // story #3312 AC5: gate_id가 없으면 work_item(+work_item_type)으로 「이 work item의
+      // 최신 external_publish 게이트」를 조회해 동일 판정을 한다(PR#3704 «커넥터용 조회
+      // 계약» — 새 라우트 없음, 기존 GET /api/v2/gates 필터+limit=1). 레시피 자동루프가
+      // gate_id를 몰라도 되게 하는 경로 — 명시 gate_id가 있으면 그쪽이 항상 우선.
       name: 'publish_stibee_campaign',
       description:
         'Publish an email campaign via Stibee (create draft → set HTML content → optional ' +
-        'metadata update → send), gated on an approved external_publish Gate. The send call ' +
-        'is blocked unless GET /api/v2/gates/{gate_id} reports status approved or auto_passed ' +
-        '— calling this tool does not itself authorize the send.',
+        'metadata update → send), gated on an approved external_publish Gate. Pass either ' +
+        'gate_id (explicit) or work_item (resolves the latest external_publish gate for that ' +
+        'work item) — at least one is required. The send call is blocked unless the resolved ' +
+        'gate reports status approved or auto_passed — calling this tool does not itself ' +
+        'authorize the send.',
       inputSchema: {
         type: 'object',
         properties: {
           gate_id: {
             type: 'string',
-            description: 'The external_publish Gate id this publish task is linked to.',
+            description: 'The external_publish Gate id this publish task is linked to. ' +
+              'Omit to resolve via work_item instead — one of gate_id/work_item is required.',
+          },
+          work_item: {
+            type: 'string',
+            description: 'Story/task id this publish belongs to. Required if gate_id is ' +
+              'omitted (resolves the latest external_publish gate for it); also used for ' +
+              'evidence/logging when gate_id is given.',
+          },
+          work_item_type: {
+            type: 'string',
+            description: 'Type of work_item for gate resolution — defaults to "story".',
           },
           create: {
             type: 'object',
@@ -269,7 +286,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: 'Optional Stibee PUT /v2/emails/{id} body (metadata overrides).',
           },
         },
-        required: ['gate_id', 'create', 'html'],
+        required: ['create', 'html'],
         additionalProperties: false,
       },
     },
@@ -280,24 +297,28 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       // 도구를 호출하는 것 자체는 승인의 증거가 아니다: 내부에서 GET
       // /api/v2/gates/{gate_id}로 gate.status를 재확인하고, approved/auto_passed가
       // 아니면 실제 게시(POST .../threads_publish)를 절대 호출하지 않는다
-      // (defense-in-depth). work_item은 발행 task 추적용(호출부 로깅/증거 첨부에 사용,
-      // 커넥터 계약에는 값 자체를 요구하지 않는다 — gate_id가 이미 그 task에 link돼 있다).
-      // ⚠️THREADS_ACCESS_TOKEN/THREADS_USER_ID 미설정이면 즉시 에러
+      // (defense-in-depth). ⚠️THREADS_ACCESS_TOKEN/THREADS_USER_ID 미설정이면 즉시 에러
       // (/sprintable:configure-threads 안내). ⚠️조직 상수 0 — 어느 조직이든 자기
       // 토큰·계정으로 그대로 돈다(story #3311 «제품 경계»).
+      // story #3312 AC5: gate_id가 없으면 work_item(+work_item_type)으로 「이 work item의
+      // 최신 external_publish 게이트」를 조회해 동일 판정을 한다(stibee와 동형 경로).
+      // work_item은 gate_id가 있을 때도 항상 필수 — evidence/logging에 쓰는 원래 목적은
+      // 그대로 유지.
       name: 'publish_threads_post',
       description:
         'Publish a text post to Threads (create container → publish), gated on an approved ' +
-        'external_publish Gate. The publish call is blocked unless GET /api/v2/gates/{gate_id} ' +
-        'reports status approved or auto_passed — calling this tool does not itself authorize ' +
-        'the publish. Text is capped at 500 characters and the 250-post/24h Threads limit is ' +
-        'checked before posting.',
+        'external_publish Gate. Pass gate_id explicitly, or omit it to resolve the latest ' +
+        'external_publish gate for work_item instead. The publish call is blocked unless the ' +
+        'resolved gate reports status approved or auto_passed — calling this tool does not ' +
+        'itself authorize the publish. Text is capped at 500 characters and the 250-post/24h ' +
+        'Threads limit is checked before posting.',
       inputSchema: {
         type: 'object',
         properties: {
           gate_id: {
             type: 'string',
-            description: 'The external_publish Gate id this publish task is linked to.',
+            description: 'The external_publish Gate id this publish task is linked to. ' +
+              'Omit to resolve via work_item instead.',
           },
           text: {
             type: 'string',
@@ -305,10 +326,15 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           work_item: {
             type: 'string',
-            description: 'Story/task id this publish belongs to, for evidence/logging.',
+            description: 'Story/task id this publish belongs to — always required (evidence/' +
+              'logging); also the gate-resolution key when gate_id is omitted.',
+          },
+          work_item_type: {
+            type: 'string',
+            description: 'Type of work_item for gate resolution — defaults to "story".',
           },
         },
-        required: ['gate_id', 'text', 'work_item'],
+        required: ['text', 'work_item'],
         additionalProperties: false,
       },
     },
@@ -420,24 +446,33 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             'STIBEE_ACCESS_TOKEN not configured — run /sprintable:configure-stibee <access-token> first',
           )
         }
-        const gateId = String(args.gate_id ?? '')
-        if (!gateId) throw new Error('gate_id is required')
+        // story #3312 AC5: gate_id는 이제 선택 — 없으면 work_item(+work_item_type)으로
+        // 최신 external_publish 게이트를 조회한다(gateId 명시가 항상 우선, 커넥터 쪽
+        // publishStibeeCampaign의 우선순위 로직에 위임 — 여기서 분기 안 함).
+        const gateId = args.gate_id ? String(args.gate_id) : undefined
+        const workItem = args.work_item ? String(args.work_item) : undefined
+        const workItemType = args.work_item_type ? String(args.work_item_type) : undefined
+        if (!gateId && !workItem) throw new Error('either gate_id or work_item is required')
         const create = args.create as CreateEmailRequest
         const html = String(args.html ?? '')
         const update = args.update as UpdateEmailRequest | undefined
         try {
           const result = await publishStibeeCampaign({
             gateId,
+            workItemId: workItem,
+            workItemType,
             content: { create, html, update },
             sprintableApiUrl: API_URL,
             sprintableApiKey: API_KEY,
             stibee: { accessToken: stibeeToken },
           })
-          logEvent('stibee_publish_sent', { gate_id: gateId, email_id: result.emailId })
+          logEvent('stibee_publish_sent', { gate_id: gateId, work_item: workItem, email_id: result.emailId })
           return { content: [{ type: 'text', text: JSON.stringify(result) }] }
         } catch (err) {
           if (err instanceof GateNotApprovedError) {
-            logEvent('stibee_publish_blocked', { gate_id: gateId, gate_status: err.gateStatus })
+            logEvent('stibee_publish_blocked', { gate_id: gateId, work_item: workItem, gate_status: err.gateStatus })
+          } else if (err instanceof NoGateFoundError) {
+            logEvent('stibee_publish_no_gate', { work_item: workItem })
           }
           throw err
         }
@@ -451,13 +486,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
               '/sprintable:configure-threads <access-token> <user-id> [app-secret] first',
           )
         }
-        const gateId = String(args.gate_id ?? '')
-        if (!gateId) throw new Error('gate_id is required')
+        // story #3312 AC5: gate_id 선택, 없으면 work_item으로 조회(work_item 자체는 로깅
+        // 목적으로 항상 필수 — 스키마 required, gateId 명시 여부와 무관).
+        const gateId = args.gate_id ? String(args.gate_id) : undefined
         const text = String(args.text ?? '')
         const workItem = String(args.work_item ?? '')
+        if (!workItem) throw new Error('work_item is required')
+        const workItemType = args.work_item_type ? String(args.work_item_type) : undefined
         try {
           const result = await publishThreadsPost({
             gateId,
+            workItemId: workItem,
+            workItemType,
             text,
             sprintableApiUrl: API_URL,
             sprintableApiKey: API_KEY,
@@ -468,6 +508,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         } catch (err) {
           if (err instanceof GateNotApprovedError) {
             logEvent('threads_publish_blocked', { gate_id: gateId, work_item: workItem, gate_status: err.gateStatus })
+          } else if (err instanceof NoGateFoundError) {
+            logEvent('threads_publish_no_gate', { work_item: workItem })
           }
           throw err
         }

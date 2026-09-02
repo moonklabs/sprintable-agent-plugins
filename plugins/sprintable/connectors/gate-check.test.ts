@@ -5,7 +5,14 @@
  * this file pins the pure decision function in isolation.
  */
 import { describe, test, expect } from 'bun:test'
-import { assertGateApproved, GateNotApprovedError } from './gate-check'
+import {
+  assertGateApproved,
+  assertGateApprovedForWorkItem,
+  resolveLatestGate,
+  GateNotApprovedError,
+  NoGateFoundError,
+  GateFilterMismatchError,
+} from './gate-check'
 
 function fakeFetch(status: number, body: unknown): typeof fetch {
   return (async () =>
@@ -70,5 +77,102 @@ describe('assertGateApproved (#3292)', () => {
       Authorization: 'Bearer my-key',
       'x-agent-api-key': 'my-key',
     })
+  })
+})
+
+describe('resolveLatestGate / assertGateApprovedForWorkItem (#3312 AC5 — gate_id 없이 work_item으로 조회)', () => {
+  function listFetch(gates: unknown[], status = 200): typeof fetch {
+    return (async () => new Response(JSON.stringify(gates), { status })) as unknown as typeof fetch
+  }
+
+  test('요청이 정확한 필터+limit=1로 나간다(story #2864 — limit 없으면 무정렬이라 "최신" 보장 안 됨)', async () => {
+    let capturedUrl = ''
+    let capturedHeaders: HeadersInit | undefined
+    const spy: typeof fetch = (async (url: string, init?: RequestInit) => {
+      capturedUrl = url
+      capturedHeaders = init?.headers
+      return new Response(JSON.stringify([{ id: 'gate-9', status: 'approved', gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await resolveLatestGate('wi-1', 'story', 'external_publish', 'https://app.sprintable.ai/', 'my-key', spy)
+
+    const url = new URL(capturedUrl)
+    expect(url.pathname).toBe('/api/v2/gates')
+    expect(url.searchParams.get('work_item_id')).toBe('wi-1')
+    expect(url.searchParams.get('work_item_type')).toBe('story')
+    expect(url.searchParams.get('gate_type')).toBe('external_publish')
+    expect(url.searchParams.get('limit')).toBe('1')
+    expect(capturedHeaders).toMatchObject({ Authorization: 'Bearer my-key', 'x-agent-api-key': 'my-key' })
+  })
+
+  test('gate.status=approved — 정상 통과(resolves)', async () => {
+    await expect(
+      assertGateApprovedForWorkItem(
+        'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key',
+        listFetch([{ id: 'gate-1', status: 'approved', gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]),
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  test('gate.status=pending — GateNotApprovedError(gate_id 명시 경로와 동일 판정)', async () => {
+    const err = await assertGateApprovedForWorkItem(
+      'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key',
+      listFetch([{ id: 'gate-1', status: 'pending', gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'story' }]),
+    ).catch((e) => e)
+    expect(err).toBeInstanceOf(GateNotApprovedError)
+    expect((err as GateNotApprovedError).gateStatus).toBe('pending')
+  })
+
+  test('⭐0건 — NoGateFoundError(approve 단계 미발생, "미승인"과는 다른 명시 케이스)', async () => {
+    const err = await resolveLatestGate(
+      'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key', listFetch([]),
+    ).catch((e) => e)
+    expect(err).toBeInstanceOf(NoGateFoundError)
+    expect((err as NoGateFoundError).workItemId).toBe('wi-1')
+  })
+
+  test('non-2xx(org 스코프 밖 work_item_id → 404 등) 명시 에러, 조용한 통과 금지', async () => {
+    await expect(
+      resolveLatestGate('wi-other-org', 'story', 'external_publish', 'https://app.sprintable.ai', 'key', listFetch([], 404)),
+    ).rejects.toThrow('gate list lookup failed: 404')
+  })
+
+  test('id/status/work_item_id/work_item_type을 GateSummary로 매핑한다(snake_case 응답 → camelCase)', async () => {
+    const result = await resolveLatestGate(
+      'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key',
+      listFetch([{ id: 'gate-42', status: 'approved', gate_type: 'external_publish', designated_approver_id: 'member-1', work_item_id: 'wi-1', work_item_type: 'story' }]),
+    )
+    expect(result).toEqual({
+      id: 'gate-42', status: 'approved', gateType: 'external_publish', designatedApproverId: 'member-1', workItemId: 'wi-1', workItemType: 'story',
+    })
+  })
+
+  test('⭐PO 리뷰 정정(PR#30) — 응답 첫 건의 gate_type이 요청과 다르면 fail-closed(서버가 필터 침묵 무시하는 story #2864급 재발 방어)', async () => {
+    // story #2864 재발 시나리오 재현: gate_type=external_publish로 요청했는데 서버가 필터를
+    // 무시하고 같은 work item의 다른 게이트(예: merge, 이미 approved)를 돌려주는 경우.
+    const err = await resolveLatestGate(
+      'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key',
+      listFetch([{ id: 'gate-merge-1', status: 'approved', gate_type: 'merge', work_item_id: 'wi-1', work_item_type: 'story' }]),
+    ).catch((e) => e)
+    expect(err).toBeInstanceOf(GateFilterMismatchError)
+    expect((err as GateFilterMismatchError).received.gateType).toBe('merge')
+  })
+
+  test('응답 첫 건의 work_item_id가 요청과 다르면 fail-closed', async () => {
+    await expect(
+      resolveLatestGate(
+        'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key',
+        listFetch([{ id: 'gate-x', status: 'approved', gate_type: 'external_publish', work_item_id: 'wi-OTHER', work_item_type: 'story' }]),
+      ),
+    ).rejects.toThrow(GateFilterMismatchError)
+  })
+
+  test('응답 첫 건의 work_item_type이 요청과 다르면 fail-closed', async () => {
+    await expect(
+      resolveLatestGate(
+        'wi-1', 'story', 'external_publish', 'https://app.sprintable.ai', 'key',
+        listFetch([{ id: 'gate-x', status: 'approved', gate_type: 'external_publish', work_item_id: 'wi-1', work_item_type: 'task' }]),
+      ),
+    ).rejects.toThrow(GateFilterMismatchError)
   })
 })
