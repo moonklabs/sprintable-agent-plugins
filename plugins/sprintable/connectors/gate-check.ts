@@ -13,10 +13,26 @@
 
 const APPROVED_GATE_STATUSES = new Set(['approved', 'auto_passed'])
 
+/** 승인 판정 자체 — assertGateApproved와 assertGateApprovedForWorkItem이 공유한다(새 게이트
+ * 로직 발명 0: 판정 규칙은 한 곳에만 있고, 두 조회 경로가 그 결과를 먹인다). */
+export function isApprovedGateStatus(status: string): boolean {
+  return APPROVED_GATE_STATUSES.has(status)
+}
+
 export class GateNotApprovedError extends Error {
   constructor(public readonly gateStatus: string) {
     super(`external_publish gate is ${gateStatus}, not approved/auto_passed — publish blocked`)
     this.name = 'GateNotApprovedError'
+  }
+}
+
+/** story #3312 AC5 — approve 단계가 아직 게이트를 만들지 않은 상태(work_item에 매칭되는
+ * gate가 0건). 「게이트가 있는데 미승인」(GateNotApprovedError)과는 다른 케이스라 별도
+ * 타입으로 구별한다 — 호출부가 "아직 대기" vs "승인 거부"를 다르게 다룰 수 있게. */
+export class NoGateFoundError extends Error {
+  constructor(public readonly workItemId: string, public readonly gateType: string) {
+    super(`no ${gateType} gate found yet for work_item_id=${workItemId} — approve stage hasn't run`)
+    this.name = 'NoGateFoundError'
   }
 }
 
@@ -46,7 +62,88 @@ export async function assertGateApproved(
     throw new Error(`gate lookup failed: ${res.status}`)
   }
   const gate = (await res.json()) as GateStatusResponse
-  if (!APPROVED_GATE_STATUSES.has(gate.status)) {
+  if (!isApprovedGateStatus(gate.status)) {
+    throw new GateNotApprovedError(gate.status)
+  }
+}
+
+export interface GateSummary {
+  id: string
+  status: string
+  designatedApproverId?: string | null
+  workItemId: string
+  workItemType: string
+}
+
+interface GateListResponseEntry {
+  id: string
+  status: string
+  designated_approver_id?: string | null
+  work_item_id: string
+  work_item_type: string
+}
+
+/**
+ * story #3312 AC5 — gate_id 없이 "이 work item의 최신 {gateType} 게이트"를 조회한다.
+ * 계약(PR#3704 «커넥터용 조회 계약», PO 확定): 새 라우트 없음, 기존
+ * `GET /api/v2/gates` 필터 조합 + `limit=1`. `limit`가 있어야 백엔드가 `created_at desc`로
+ * 정렬한다(gates.py list_gates, story #2864 조건부 정렬 — limit/offset 없으면 무정렬이라
+ * "최신"을 보장 못 함, 그래서 이 조회는 항상 `limit=1`을 붙인다). 0건이면 approve 단계가
+ * 아직 안 돈 것 — NoGateFoundError(명시, 조용한 통과 금지). org 스코프 밖 work_item_id는
+ * 서버가 404(존재 비노출 관례)를 주며 이 함수는 그것도 일반 조회 실패로 그대로 throw한다.
+ */
+export async function resolveLatestGate(
+  workItemId: string,
+  workItemType: string,
+  gateType: string,
+  apiUrl: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<GateSummary> {
+  const url = new URL(`${apiUrl.replace(/\/$/, '')}/api/v2/gates`)
+  url.searchParams.set('work_item_id', workItemId)
+  url.searchParams.set('work_item_type', workItemType)
+  url.searchParams.set('gate_type', gateType)
+  url.searchParams.set('limit', '1') // ⚠️정렬 트리거(story #2864) — 빼면 "최신" 보장 소실.
+  const res = await fetchImpl(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'x-agent-api-key': apiKey,
+    },
+  })
+  if (!res.ok) {
+    throw new Error(`gate list lookup failed: ${res.status}`)
+  }
+  const gates = (await res.json()) as GateListResponseEntry[]
+  if (gates.length === 0) {
+    throw new NoGateFoundError(workItemId, gateType)
+  }
+  const gate = gates[0] // limit=1 + 서버 정렬(created_at desc) — 이미 "최신 1건".
+  return {
+    id: gate.id,
+    status: gate.status,
+    designatedApproverId: gate.designated_approver_id,
+    workItemId: gate.work_item_id,
+    workItemType: gate.work_item_type,
+  }
+}
+
+/**
+ * resolveLatestGate + isApprovedGateStatus — assertGateApproved의 work_item 판 (한 번의
+ * 왕복으로 끝난다: 목록 응답에 이미 status가 실려 있어 별도 `/gates/{id}` 재조회가
+ * 필요없다). gateId를 몰라도 호출부(threads.ts/stibee.ts의 두 chokepoint)가 이 함수
+ * 하나만 지키면 "게이트 없이는 발송 안 나간다"가 gate_id 명시 경로와 동일하게 성립한다.
+ */
+export async function assertGateApprovedForWorkItem(
+  workItemId: string,
+  workItemType: string,
+  gateType: string,
+  apiUrl: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const gate = await resolveLatestGate(workItemId, workItemType, gateType, apiUrl, apiKey, fetchImpl)
+  if (!isApprovedGateStatus(gate.status)) {
     throw new GateNotApprovedError(gate.status)
   }
 }

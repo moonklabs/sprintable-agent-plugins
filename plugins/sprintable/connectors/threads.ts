@@ -17,7 +17,10 @@
  * ⚠️M1 스코프 — 실계정 실발행은 M3(별도 사람 승인). 이 모듈 자체는 축 무관하게 항상
  * chokepoint를 강제한다(dry-run 여부는 호출부/환경 문제, 이 모듈이 판단하지 않는다).
  */
-import { assertGateApproved } from './gate-check'
+import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
+
+const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
+const DEFAULT_WORK_ITEM_TYPE = 'story'
 
 const THREADS_BASE = 'https://graph.threads.net/v1.0'
 const MAX_TEXT_LENGTH = 500
@@ -130,17 +133,48 @@ export async function threadsGetInsights(
 }
 
 export interface PublishThreadsPostParams {
-  gateId: string
+  /** 명시 경로(수동 호출·테스트 호환) — 있으면 이 경로가 우선한다. */
+  gateId?: string
+  /** work_item 경로(story #3312 AC5, 레시피 자동루프용) — gateId가 없을 때 이 work item의
+   * 최신 external_publish 게이트를 조회해 판정한다. gateId·workItemId 둘 다 없으면 즉시
+   * 명시 에러(네트워크 호출 0건). */
+  workItemId?: string
+  /** 기본 'story' — recipe work item이 대부분 story라 기본값을 둔다(오타 방지 목적일 뿐 조직
+   * 규칙 아님, 값 자체는 항상 호출부가 넘길 수 있다). */
+  workItemType?: string
   text: string
   sprintableApiUrl: string
   sprintableApiKey: string
   threads: ThreadsClientConfig
-  /** 테스트 전용 — assertGateApproved에 넘길 fetch 스파이(Threads 호출용 fetch와 별개). */
+  /** 테스트 전용 — assertGateApproved(ForWorkItem)에 넘길 fetch 스파이(Threads 호출용
+   * fetch와 별개). */
   gateCheckFetchImpl?: typeof fetch
 }
 
 export interface PublishThreadsPostResult {
   postId: string
+}
+
+/**
+ * gateId 명시 경로 또는 work_item 해석 경로(story #3312 AC5) 중 하나로 게이트 승인을
+ * 확認한다 — 두 chokepoint가 매번 이 함수 하나만 부르면 되도록 판정 로직을 한 곳에
+ * 모은다(새 게이트 로직 발명 0, gate-check.ts의 두 검증 함수를 그대로 위임).
+ */
+async function assertPublishGateApproved(params: PublishThreadsPostParams): Promise<void> {
+  if (params.gateId) {
+    await assertGateApproved(
+      params.gateId, params.sprintableApiUrl, params.sprintableApiKey, params.gateCheckFetchImpl,
+    )
+    return
+  }
+  if (params.workItemId) {
+    await assertGateApprovedForWorkItem(
+      params.workItemId, params.workItemType ?? DEFAULT_WORK_ITEM_TYPE, EXTERNAL_PUBLISH_GATE_TYPE,
+      params.sprintableApiUrl, params.sprintableApiKey, params.gateCheckFetchImpl,
+    )
+    return
+  }
+  throw new Error('publishThreadsPost requires either gateId or workItemId to check the external_publish gate')
 }
 
 /**
@@ -154,7 +188,8 @@ export interface PublishThreadsPostResult {
  *      1)과 2) 사이(한도조회+컨테이너생성)에 승인이 철회되는 레이스를 막는 재확認.
  * 둘 중 하나라도 지우면(뮤테이션) 대응하는 pin이 RED — threads.test.ts가 각각 별도로
  * 검증한다(2)만 지워도 1)이 여전히 최초 outbound를 막지만, 레이스 방어 테스트가 publish
- * 호출 발생으로 RED).
+ * 호출 발생으로 RED). work_item 경로(AC5)는 매 chokepoint마다 새로 조회하므로(캐싱 없음)
+ * ①과 ② 사이에 게이트가 교체/철회되는 레이스도 gateId 명시 경로와 동일하게 잡힌다.
  */
 export async function publishThreadsPost(
   params: PublishThreadsPostParams,
@@ -164,9 +199,7 @@ export async function publishThreadsPost(
 
   // ⭐chokepoint① — 한도 조회·컨테이너 생성 등 어떤 Threads 호출보다도 먼저. 미승인이면
   // 여기서 throw — outbound(한도 조회 GET 포함) 정확히 0건.
-  await assertGateApproved(
-    params.gateId, params.sprintableApiUrl, params.sprintableApiKey, params.gateCheckFetchImpl,
-  )
+  await assertPublishGateApproved(params)
 
   const limit = await threadsGetPublishingLimit(params.threads)
   if (limit.quotaUsage >= limit.quotaTotal) {
@@ -178,9 +211,7 @@ export async function publishThreadsPost(
   // ⭐chokepoint② — threads_publish 호출 바로 앞의 마지막 줄(레이스 방어: ①과 이 사이에
   // 승인이 철회됐을 수 있다). 이 줄을 지우거나 위로 옮기면(뮤테이션) ①통과 후 철회된
   // 게이트로도 게시가 나가야 정상 — threads.test.ts가 그 갈림을 pin한다.
-  await assertGateApproved(
-    params.gateId, params.sprintableApiUrl, params.sprintableApiKey, params.gateCheckFetchImpl,
-  )
+  await assertPublishGateApproved(params)
 
   const { id: postId } = await threadsPublishContainer(creationId, params.threads)
   return { postId }
