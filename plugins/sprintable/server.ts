@@ -28,6 +28,7 @@ import {
   type CreateEmailRequest,
   type UpdateEmailRequest,
 } from './connectors/stibee'
+import { publishThreadsPost } from './connectors/threads'
 import { GateNotApprovedError } from './connectors/gate-check'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
@@ -272,6 +273,45 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      // story #3311([M1·마케팅자동화] Threads 발행 커넥터) — doc
+      // threads-publish-channel-onboarding, story #3292(스티비)와 동형 chokepoint.
+      // gate_id는 external_publish 게이트가 이 발행 task에 이미 묶여 있어야 함 — 이
+      // 도구를 호출하는 것 자체는 승인의 증거가 아니다: 내부에서 GET
+      // /api/v2/gates/{gate_id}로 gate.status를 재확인하고, approved/auto_passed가
+      // 아니면 실제 게시(POST .../threads_publish)를 절대 호출하지 않는다
+      // (defense-in-depth). work_item은 발행 task 추적용(호출부 로깅/증거 첨부에 사용,
+      // 커넥터 계약에는 값 자체를 요구하지 않는다 — gate_id가 이미 그 task에 link돼 있다).
+      // ⚠️THREADS_ACCESS_TOKEN/THREADS_USER_ID 미설정이면 즉시 에러
+      // (/sprintable:configure-threads 안내). ⚠️조직 상수 0 — 어느 조직이든 자기
+      // 토큰·계정으로 그대로 돈다(story #3311 «제품 경계»).
+      name: 'publish_threads_post',
+      description:
+        'Publish a text post to Threads (create container → publish), gated on an approved ' +
+        'external_publish Gate. The publish call is blocked unless GET /api/v2/gates/{gate_id} ' +
+        'reports status approved or auto_passed — calling this tool does not itself authorize ' +
+        'the publish. Text is capped at 500 characters and the 250-post/24h Threads limit is ' +
+        'checked before posting.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          gate_id: {
+            type: 'string',
+            description: 'The external_publish Gate id this publish task is linked to.',
+          },
+          text: {
+            type: 'string',
+            description: 'Post text, max 500 characters.',
+          },
+          work_item: {
+            type: 'string',
+            description: 'Story/task id this publish belongs to, for evidence/logging.',
+          },
+        },
+        required: ['gate_id', 'text', 'work_item'],
+        additionalProperties: false,
+      },
+    },
   ],
 }))
 
@@ -398,6 +438,36 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         } catch (err) {
           if (err instanceof GateNotApprovedError) {
             logEvent('stibee_publish_blocked', { gate_id: gateId, gate_status: err.gateStatus })
+          }
+          throw err
+        }
+      }
+      case 'publish_threads_post': {
+        const threadsToken = (process.env.THREADS_ACCESS_TOKEN ?? '').trim()
+        const threadsUserId = (process.env.THREADS_USER_ID ?? '').trim()
+        if (!threadsToken || !threadsUserId) {
+          throw new Error(
+            'THREADS_ACCESS_TOKEN/THREADS_USER_ID not configured — run ' +
+              '/sprintable:configure-threads <access-token> <user-id> [app-secret] first',
+          )
+        }
+        const gateId = String(args.gate_id ?? '')
+        if (!gateId) throw new Error('gate_id is required')
+        const text = String(args.text ?? '')
+        const workItem = String(args.work_item ?? '')
+        try {
+          const result = await publishThreadsPost({
+            gateId,
+            text,
+            sprintableApiUrl: API_URL,
+            sprintableApiKey: API_KEY,
+            threads: { accessToken: threadsToken, userId: threadsUserId },
+          })
+          logEvent('threads_publish_sent', { gate_id: gateId, work_item: workItem, post_id: result.postId })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof GateNotApprovedError) {
+            logEvent('threads_publish_blocked', { gate_id: gateId, work_item: workItem, gate_status: err.gateStatus })
           }
           throw err
         }

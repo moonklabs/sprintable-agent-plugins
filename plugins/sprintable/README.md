@@ -73,6 +73,55 @@ gated on a separate human approval. Credentials are local-`.env` (same file as
 server-side per-org secrets are an M2+ concern if/when other orgs BYOA their own Stibee
 account.
 
+## Marketing publish connector — Threads (#3311, M1)
+
+`connectors/threads.ts` — the second 발행 커넥터, replacing Stibee as the *first* publish
+channel (Stibee's send API is Pro-gated and dogfood has 0 subscribers today, so reach was
+0 — see story #3311 background; Stibee stays wired for whenever subscribers exist).
+
+**This connector is not Moonklabs-only.** It is public-plugin shaped: any organization that
+installs this plugin, sets its own `THREADS_ACCESS_TOKEN`/`THREADS_USER_ID` in its own
+agent's env, and calls `publish_threads_post` gets the same behavior with its own Threads
+account — there is no Moonklabs constant anywhere in `connectors/threads.ts`. Moonklabs is
+customer-zero, not a hardcoded default. Onboarding (Meta app → Threads tester account →
+access token, written to be followable by "the least capable agent") is doc
+`threads-publish-channel-onboarding` and mirrored above in `skills/configure-threads/`.
+
+```
+/sprintable:configure-threads <access-token> <user-id> [app-secret]   # writes to the same .env
+```
+
+The `publish_threads_post` MCP tool runs a 2-call Threads Graph API sequence — `POST
+/v1.0/{THREADS_USER_ID}/threads` (create container, `media_type=TEXT`) → `POST
+/v1.0/{THREADS_USER_ID}/threads_publish` (`creation_id`) → published post id. **Two
+chokepoints** (PR#29 PO AC review — container creation is a real write to Meta, unlike
+Stibee's own-system draft prep, so it cannot go out unapproved either):
+`connectors/gate-check.ts::assertGateApproved()` runs (1) immediately on entry, before the
+rate-limit lookup or container creation — zero outbound calls to Meta while the gate isn't
+`approved`/`auto_passed` — and (2) again immediately before `threads_publish`, re-checking
+in case approval was revoked between (1) and (2). No new gate logic — same function Stibee
+uses, called twice. Pinned with two independent mutation tests
+(`connectors/threads.test.ts`, verified locally by deleting each `assertGateApproved` call
+in turn and confirming only its own tests go red, then restoring): removing chokepoint ①
+turns the "zero outbound while pending/rejected" tests red; removing chokepoint ② turns the
+race-defense test red without touching the others.
+
+Also checked before posting: text length (500-char cap, explicit error over the limit) and
+the 250-post/24h Threads publishing limit (`GET .../threads_publishing_limit`, explicit
+error if exhausted — no silent drop, no automatic retry). `threadsGetInsights()` (views/
+likes/replies/reposts/quotes) is implemented and tested for the M3 measure step but not
+called from the publish path yet.
+
+M1 scope: dev is a mock-server dry run (`bun test`) plus explicit errors when
+`THREADS_ACCESS_TOKEN`/`THREADS_USER_ID` are unset — no silent no-op. Real-account posting
+(a company-owned Threads account in Meta's developer mode as a registered tester) is a
+separate, explicitly confirmed step once credentials exist; real sends beyond that are M3,
+gated on human approval same as Stibee.
+
+Applying this (or any) recipe to a project happens in **프로젝트 설정 → 워크플로우
+갤러리**, not from the event-definition catalog (`/organization/events`) itself — that
+gallery→apply gap for non-developer users is tracked separately in story #3316.
+
 ## Remaining S2 work (build)
 
 1. **`.env` loader** in `server.ts` — port telegram's pattern (load `~/.claude/channels/sprintable/.env` into `process.env`; real env wins).
