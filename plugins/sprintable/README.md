@@ -183,6 +183,25 @@ Applying this (or any) recipe to a project happens in **프로젝트 설정 → 
 갤러리**, not from the event-definition catalog (`/organization/events`) itself — that
 gallery→apply gap for non-developer users is tracked separately in story #3316.
 
+## Measure — `get_threads_insights` (#3321, M5)
+
+The publish-side connectors have a measure counterpart: `get_threads_insights` fetches a
+Threads post's insights (`connectors/threads.ts::threadsGetInsights()`, built but unexposed
+since #3311) and records them as a Sprintable evidence entry (`connectors/evidence.ts::
+recordEvidence()`, `POST /api/v2/evidence` — request shape pulled straight from
+`backend/app/routers/evidence.py::EvidenceCreateRequest`, not guessed; that Pydantic model
+has no `extra="forbid"`, so a misspelled field is dropped silently rather than rejected —
+`evidence.test.ts` pins the exact field names sent) — in one call, not two, so "measured but
+forgot to record" can't happen structurally (same reason `publish_threads_post` bundles the
+gate check with the publish).
+
+This tool makes no success/failure judgment: metric *names* (views/likes/replies/reposts/
+quotes) are a Threads platform fact and are hardcoded; metric *targets* are not this tool's
+business — that's the work item's own `success_hypothesis`, an organization's call. If the
+Threads insights fetch itself fails, the call throws (zero evidence calls — nothing to
+record yet). If insights succeed but the evidence POST fails, the metrics are still
+returned — with `evidenceRecorded: false` and `evidenceError` set, never a silent success.
+
 ## Remaining S2 work (build)
 
 1. **`.env` loader** in `server.ts` — port telegram's pattern (load `~/.claude/channels/sprintable/.env` into `process.env`; real env wins).

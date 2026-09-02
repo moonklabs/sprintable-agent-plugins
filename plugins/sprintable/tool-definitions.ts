@@ -228,4 +228,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    // story #3321([M5·마케팅자동화] measure 단계 도구) — insights 조회+evidence 기록을
+    // 한 호출로 묶는다(connectors/threads.ts::getThreadsInsightsAndRecordEvidence,
+    // 새 로직 발명 0). 이 도구는 성공/실패 "판단"을 하지 않는다 — 응답에 verdict류
+    // 필드가 없고, 목표값 판정은 work item의 success_hypothesis가 조직 몫으로 갖는다
+    // (PO 못박음②). evidence 기록이 실패해도 지표는 그대로 반환되고
+    // evidence_recorded:false + evidence_error로 명시된다(PO 못박음① — 조용한 성공
+    // 금지).
+    name: 'get_threads_insights',
+    description:
+      'Fetch Threads post insights (views/likes/replies/reposts/quotes) and record them as ' +
+      'Sprintable evidence in one call. Metric names are Threads platform facts; this tool ' +
+      'makes no success/failure judgment — target values belong to the work item\'s ' +
+      'success_hypothesis. If evidence recording fails, the metrics are still returned with ' +
+      'evidence_recorded:false and evidence_error set — never a silent success.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        post_id: {
+          type: 'string',
+          description: 'Threads post (media) id — the id publish_threads_post returned.',
+        },
+        work_item: {
+          type: 'string',
+          description: 'Story/task id this measurement belongs to — required (evidence attribution).',
+        },
+        work_item_type: {
+          type: 'string',
+          description: 'Type of work_item for evidence attribution — defaults to "story".',
+        },
+      },
+      required: ['post_id', 'work_item'],
+      additionalProperties: false,
+    },
+  },
 ]

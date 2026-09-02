@@ -28,7 +28,7 @@ import {
   type CreateEmailRequest,
   type UpdateEmailRequest,
 } from './connectors/stibee'
-import { publishThreadsPost } from './connectors/threads'
+import { publishThreadsPost, getThreadsInsightsAndRecordEvidence } from './connectors/threads'
 import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
 import { toWireDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
@@ -352,6 +352,33 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           undefined
         if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
         return { content: [{ type: 'text', text: JSON.stringify(toWireDescriptor(descriptor)) }] }
+      }
+      case 'get_threads_insights': {
+        const threadsToken = (process.env.THREADS_ACCESS_TOKEN ?? '').trim()
+        const threadsUserId = (process.env.THREADS_USER_ID ?? '').trim()
+        if (!threadsToken || !threadsUserId) {
+          throw new Error(
+            'THREADS_ACCESS_TOKEN/THREADS_USER_ID not configured — run ' +
+              '/sprintable:configure-threads <access-token> <user-id> [app-secret] first',
+          )
+        }
+        const postId = String(args.post_id ?? '')
+        if (!postId) throw new Error('post_id is required')
+        const workItem = String(args.work_item ?? '')
+        if (!workItem) throw new Error('work_item is required')
+        const workItemType = args.work_item_type ? String(args.work_item_type) : undefined
+        const result = await getThreadsInsightsAndRecordEvidence({
+          postId,
+          workItemId: workItem,
+          workItemType,
+          sprintableApiUrl: API_URL,
+          sprintableApiKey: API_KEY,
+          threads: { accessToken: threadsToken, userId: threadsUserId },
+        })
+        logEvent('threads_insights_measured', {
+          post_id: postId, work_item: workItem, evidence_recorded: result.evidenceRecorded,
+        })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
       }
       default:
         return {

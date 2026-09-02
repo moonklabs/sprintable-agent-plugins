@@ -10,6 +10,7 @@ import {
   publishThreadsPost,
   threadsGetInsights,
   threadsGetPublishingLimit,
+  getThreadsInsightsAndRecordEvidence,
   ThreadsRateLimitExceededError,
   ThreadsTextTooLongError,
 } from './threads'
@@ -383,5 +384,138 @@ describe('threadsGetInsights (#3311 AC5 — M3 measure 대비, 이번엔 함수+
     await expect(threadsGetInsights('media-1', { accessToken: 't', userId: 'u', fetchImpl })).rejects.toThrow(
       'threads insights lookup failed: 404',
     )
+  })
+})
+
+describe('getThreadsInsightsAndRecordEvidence (#3321 — measure 단계 도구, insights+evidence 원자 호출)', () => {
+  const OK_INSIGHTS = {
+    data: [
+      { name: 'views', values: [{ value: 100 }] },
+      { name: 'likes', values: [{ value: 10 }] },
+      { name: 'replies', values: [{ value: 2 }] },
+      { name: 'reposts', values: [{ value: 1 }] },
+      { name: 'quotes', values: [{ value: 0 }] },
+    ],
+  }
+
+  function insightsSpy(body: unknown = OK_INSIGHTS, status = 200) {
+    const calls: { url: string }[] = []
+    const fetchImpl = (async (url: string) => {
+      calls.push({ url })
+      return new Response(JSON.stringify(body), { status })
+    }) as unknown as typeof fetch
+    return { calls, fetchImpl }
+  }
+
+  function evidenceSpy(status = 201, body: unknown = { id: 'evidence-1' }) {
+    const calls: { url: string; body: unknown }[] = []
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body })
+      return new Response(JSON.stringify(body), { status })
+    }) as unknown as typeof fetch
+    return { calls, fetchImpl }
+  }
+
+  test('⭐AC1 — 성공 경로: insights 1콜+evidence 1콜, 응답에 5지표+evidenceRecorded:true+evidenceId', async () => {
+    const insights = insightsSpy()
+    const evidence = evidenceSpy()
+
+    const result = await getThreadsInsightsAndRecordEvidence({
+      postId: 'post-1', workItemId: 'wi-1',
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
+      evidenceFetchImpl: evidence.fetchImpl,
+    })
+
+    expect(result).toMatchObject({ views: 100, likes: 10, replies: 2, reposts: 1, quotes: 0, evidenceRecorded: true, evidenceId: 'evidence-1' })
+    expect(insights.calls).toHaveLength(1)
+    expect(evidence.calls).toHaveLength(1)
+  })
+
+  test('evidence 기록 body가 work_item_id/type=metric/ref=postId/지표 note를 정확히 싣는다', async () => {
+    const insights = insightsSpy()
+    const evidence = evidenceSpy()
+
+    await getThreadsInsightsAndRecordEvidence({
+      postId: 'post-42', workItemId: 'wi-9', workItemType: 'task',
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
+      evidenceFetchImpl: evidence.fetchImpl,
+    })
+
+    const body = JSON.parse(evidence.calls[0].body as string)
+    expect(body.work_item_id).toBe('wi-9')
+    expect(body.work_item_type).toBe('task')
+    expect(body.type).toBe('metric')
+    expect(body.ref).toBe('post-42')
+    const note = JSON.parse(body.note)
+    expect(note).toMatchObject({ views: 100, likes: 10, replies: 2, reposts: 1, quotes: 0 })
+    expect(typeof note.measured_at).toBe('string')
+    expect(() => new Date(note.measured_at).toISOString()).not.toThrow()
+  })
+
+  test('⭐AC2 — insights 실패 → throw, evidence 호출 0건(원자성: 잴 것 없으면 기록도 없다)', async () => {
+    const insights = insightsSpy({}, 500)
+    const evidence = evidenceSpy()
+
+    await expect(
+      getThreadsInsightsAndRecordEvidence({
+        postId: 'post-1', workItemId: 'wi-1',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
+        evidenceFetchImpl: evidence.fetchImpl,
+      }),
+    ).rejects.toThrow('threads insights lookup failed: 500')
+    expect(evidence.calls).toHaveLength(0)
+  })
+
+  test('⭐PO 리뷰 못박음① — evidence 기록 실패해도 지표는 반환·evidenceRecorded:false+evidenceError 명시(조용한 성공 금지)', async () => {
+    const insights = insightsSpy()
+    const evidence = evidenceSpy(500)
+
+    const result = await getThreadsInsightsAndRecordEvidence({
+      postId: 'post-1', workItemId: 'wi-1',
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
+      evidenceFetchImpl: evidence.fetchImpl,
+    })
+
+    expect(result).toMatchObject({ views: 100, likes: 10, replies: 2, reposts: 1, quotes: 0, evidenceRecorded: false })
+    expect(result.evidenceError).toContain('500')
+    expect(result.evidenceId).toBeUndefined()
+    expect(evidence.calls).toHaveLength(1) // 시도는 정확히 1번 — 재시도 정책 0
+  })
+
+  test('⭐AC4 — workItemId 없으면 즉시 명시 에러, 네트워크 호출 0건', async () => {
+    const insights = insightsSpy()
+    const evidence = evidenceSpy()
+
+    await expect(
+      getThreadsInsightsAndRecordEvidence({
+        postId: 'post-1', workItemId: '',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
+        evidenceFetchImpl: evidence.fetchImpl,
+      }),
+    ).rejects.toThrow('requires workItemId')
+    expect(insights.calls).toHaveLength(0)
+    expect(evidence.calls).toHaveLength(0)
+  })
+
+  test('AC3 — 응답 스키마에 verdict/success류 필드가 없다(순수 지표+기록상태만)', async () => {
+    const insights = insightsSpy()
+    const evidence = evidenceSpy()
+
+    const result = await getThreadsInsightsAndRecordEvidence({
+      postId: 'post-1', workItemId: 'wi-1',
+      sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+      threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
+      evidenceFetchImpl: evidence.fetchImpl,
+    })
+
+    const keys = Object.keys(result)
+    for (const forbidden of ['verdict', 'success', 'passed', 'ok', 'goalMet']) {
+      expect(keys).not.toContain(forbidden)
+    }
   })
 })
