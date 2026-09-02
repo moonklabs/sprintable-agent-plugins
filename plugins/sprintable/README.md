@@ -159,11 +159,7 @@ apart:
    can declare `capability: {kind: 'publish'}` without naming a `connector_key` and the
    backend can find a registered connector that offers that kind — Threads is `['publish',
    'measure']` (get_threads_insights shipped in #3321), Stibee is `['publish']` only (no
-   measure tool yet). The backend can't call an agent's
-   MCP tools, so this is meant to be POSTed to an org connector registry when
-   `/sprintable:configure-threads`/`-stibee` runs — the registry endpoint itself is a
-   separate, backend-side story (PR A, `org_connector_registry`); this PR only ships the
-   descriptor and the read-only tool that exposes it.
+   measure tool yet).
 
 **Credentials never travel in this descriptor.** `requiresEnv` (wire: `requires_env`) lists
 only the *names* of local-`.env` variables the connector needs (e.g.
@@ -183,6 +179,30 @@ Reassembling the dot-path into the actual nested MCP call argument (`{create: {s
 specifically so it (and the schema derivation) can be unit-tested — `server.ts` runs
 `mcp.connect()`/SSE dial-out as a module-load side effect, so it can never be `import`ed
 directly by a test.
+
+### Registering with the org connector registry (`connectors/registry.ts`, #3317)
+
+The backend can't call an agent's MCP tools, so the descriptor has to travel the other
+way: `register_connector_schema` (`{connector: 'threads'|'stibee'}`) POSTs
+`describe_connector`'s exact wire output to
+`POST /api/v2/organizations/{org_id}/connectors/{key}` (route/body contract pulled from
+`backend/app/routers/connectors.py`, not guessed) — an idempotent upsert any org member can
+call, run automatically at the end of `/sprintable:configure-threads`/`-stibee`. `org_id`
+isn't something this plugin already knows, so `resolveOrgId()` looks it up fresh every call
+via `GET /api/v2/auth/me` (no caching — registration is rare enough that the extra round
+trip is free). `set_connector_config` (`{connector, config}`) then lets an **org owner/admin**
+push non-secret `org_config` values (sender email, list id, …) via
+`PUT .../connectors/{key}/config`; a non-owner/admin agent gets a `ConnectorConfigForbiddenError`
+pointing at the org settings screen or an admin, not a silent failure — 403 is the expected
+shape of "you're not allowed," not a bug to retry past.
+
+Secrets are kept out of both calls in two independent layers, matching the backend's own
+"don't trust the plugin" stance (server-side, a `source: 'org_config'` field name matching
+`/token|secret|password|api[_-]?key/i` is rejected with 422): client-side,
+`registerConnectorSchema` only ever sends what `hasSecretLeakInFields()` already verified
+holds no credential names, and `assertNoSecretsInConfig()` throws **before any network
+call** if a `set_connector_config` payload's keys collide with the connector's
+`requiresEnv` names.
 
 Applying this (or any) recipe to a project happens in **프로젝트 설정 → 워크플로우
 갤러리**, not from the event-definition catalog (`/organization/events`) itself — that

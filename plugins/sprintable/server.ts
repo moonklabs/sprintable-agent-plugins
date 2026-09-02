@@ -30,9 +30,16 @@ import {
 } from './connectors/stibee'
 import { publishThreadsPost, getThreadsInsightsAndRecordEvidence } from './connectors/threads'
 import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
-import { toWireDescriptor } from './connectors/connector-schema'
+import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
+import { registerConnectorSchema, updateConnectorConfig, ConnectorConfigForbiddenError } from './connectors/registry'
+
+function resolveConnectorDescriptor(key: string): ConnectorDescriptor | undefined {
+  if (key === 'threads') return THREADS_CONNECTOR_DESCRIPTOR
+  if (key === 'stibee') return STIBEE_CONNECTOR_DESCRIPTOR
+  return undefined
+}
 import { TOOL_DEFINITIONS } from './tool-definitions'
 import { readFileSync, chmodSync, appendFileSync, writeFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
@@ -346,12 +353,35 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       case 'describe_connector': {
         const connector = String(args.connector ?? '')
-        const descriptor =
-          connector === 'threads' ? THREADS_CONNECTOR_DESCRIPTOR :
-          connector === 'stibee' ? STIBEE_CONNECTOR_DESCRIPTOR :
-          undefined
+        const descriptor = resolveConnectorDescriptor(connector)
         if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
         return { content: [{ type: 'text', text: JSON.stringify(toWireDescriptor(descriptor)) }] }
+      }
+      case 'register_connector_schema': {
+        const connector = String(args.connector ?? '')
+        const descriptor = resolveConnectorDescriptor(connector)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
+        const result = await registerConnectorSchema(toWireDescriptor(descriptor), {
+          apiUrl: API_URL, apiKey: API_KEY,
+        })
+        logEvent('connector_schema_registered', { connector, version: result.version })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+      }
+      case 'set_connector_config': {
+        const connector = String(args.connector ?? '')
+        const descriptor = resolveConnectorDescriptor(connector)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
+        const config = (args.config ?? {}) as Record<string, unknown>
+        try {
+          const result = await updateConnectorConfig(descriptor, config, { apiUrl: API_URL, apiKey: API_KEY })
+          logEvent('connector_config_set', { connector, keys: Object.keys(config) })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ConnectorConfigForbiddenError) {
+            logEvent('connector_config_forbidden', { connector })
+          }
+          throw err
+        }
       }
       case 'get_threads_insights': {
         const threadsToken = (process.env.THREADS_ACCESS_TOKEN ?? '').trim()
