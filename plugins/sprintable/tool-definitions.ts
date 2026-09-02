@@ -15,9 +15,13 @@
  */
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
+import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { contentPropertiesToJsonSchema } from './connectors/connector-schema'
 
 const threadsContentSchema = contentPropertiesToJsonSchema(THREADS_CONNECTOR_DESCRIPTOR)
+// story a98dfbea — instagram도 threads처럼 flat content 필드(imageUrl·caption, dot-path
+// 없음)라 같은 기계적 파생 경로를 그대로 탄다(stibee만 중첩이라 예외).
+const instagramContentSchema = contentPropertiesToJsonSchema(INSTAGRAM_CONNECTOR_DESCRIPTOR)
 
 export interface ToolDefinition {
   name: string
@@ -206,6 +210,49 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    // story a98dfbea([M4·마케팅자동화] Instagram Graph API 커넥터, 두 번째 A 경로 채널)
+    // — threads.ts와 동형 chokepoint(story 6f2034cf "공통 계약" — ①함수 진입 직후
+    // ②publish 직전 재확認). gate_id는 external_publish 게이트가 이 발행 task에 이미
+    // 묶여 있어야 함 — 이 도구를 호출하는 것 자체는 승인의 증거가 아니다.
+    // ⚠️INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_USER_ID 미설정이면 즉시 에러. Instagram은 순수
+    // 텍스트 게시를 지원하지 않아 image_url이 필수(caption은 선택).
+    // story #3312 AC5 동형: gate_id가 없으면 work_item(+work_item_type)으로 최신
+    // external_publish 게이트를 조회한다. work_item은 gate_id가 있을 때도 항상 필수
+    // (evidence/logging).
+    // story #3317: `image_url`/`caption`은 INSTAGRAM_CONNECTOR_DESCRIPTOR(connectors/
+    // instagram.schema.ts)에서 기계적으로 파생 — 손으로 따로 안 쓴다.
+    name: 'publish_instagram_post',
+    description:
+      'Publish an image post to Instagram (create media container → publish), gated on an ' +
+      'approved external_publish Gate. Pass gate_id explicitly, or omit it to resolve the ' +
+      'latest external_publish gate for work_item instead. The publish call is blocked unless ' +
+      'the resolved gate reports status approved or auto_passed — calling this tool does not ' +
+      'itself authorize the publish. Instagram does not support text-only posts — image_url is ' +
+      'required.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        gate_id: {
+          type: 'string',
+          description: 'The external_publish Gate id this publish task is linked to. ' +
+            'Omit to resolve via work_item instead.',
+        },
+        ...instagramContentSchema.properties,
+        work_item: {
+          type: 'string',
+          description: 'Story/task id this publish belongs to — always required (evidence/' +
+            'logging); also the gate-resolution key when gate_id is omitted.',
+        },
+        work_item_type: {
+          type: 'string',
+          description: 'Type of work_item for gate resolution — defaults to "story".',
+        },
+      },
+      required: [...instagramContentSchema.required, 'work_item'],
+      additionalProperties: false,
+    },
+  },
+  {
     // story #3317 — 조회 전용(부작용 0). content_package 계약(connector-schema.ts
     // toWireDescriptor 형상)을 그대로 반환 — 백엔드가 조직 커넥터 레지스트리 등록에
     // 소비할 계약(AC2, 등록 엔드포인트 자체는 별도 스토리). apply-time 검사가 "필수
@@ -220,7 +267,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee'],
+          enum: ['threads', 'stibee', 'instagram'],
           description: 'Which connector to describe.',
         },
       },
@@ -282,7 +329,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee'],
+          enum: ['threads', 'stibee', 'instagram'],
           description: 'Which connector to register.',
         },
       },
@@ -308,7 +355,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee'],
+          enum: ['threads', 'stibee', 'instagram'],
           description: 'Which connector to configure.',
         },
         config: {

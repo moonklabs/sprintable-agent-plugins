@@ -8,6 +8,7 @@ import { describe, test, expect } from 'bun:test'
 import { TOOL_DEFINITIONS } from './tool-definitions'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
+import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { contentFieldNames } from './connectors/connector-schema'
 
 function toolByName(name: string) {
@@ -57,10 +58,27 @@ describe('publish_stibee_campaign — content_package 드리프트 pin (중첩 �
   })
 })
 
+describe('publish_instagram_post — content_package 드리프트 0 (기계적 파생, story a98dfbea)', () => {
+  test('INSTAGRAM_CONNECTOR_DESCRIPTOR의 content 필드(imageUrl·caption)가 inputSchema.properties에 정확히 존재한다', () => {
+    const tool = toolByName('publish_instagram_post')
+    expect(tool.inputSchema.properties.imageUrl).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.caption).toMatchObject({ type: 'string' })
+  })
+
+  test('imageUrl만 required(caption은 선택) — INSTAGRAM_CONNECTOR_DESCRIPTOR의 required 플래그 그대로 반영', () => {
+    const tool = toolByName('publish_instagram_post')
+    for (const name of contentFieldNames(INSTAGRAM_CONNECTOR_DESCRIPTOR)) {
+      const field = INSTAGRAM_CONNECTOR_DESCRIPTOR.fields.find((f) => f.name === name)!
+      if (field.required) expect(tool.inputSchema.required).toContain(name)
+      else expect(tool.inputSchema.required).not.toContain(name)
+    }
+  })
+})
+
 describe('describe_connector — 도구 정의 존재·계약', () => {
-  test('describe_connector 도구가 등록돼 있고 connector enum이 threads/stibee 둘 다 포함한다', () => {
+  test('describe_connector 도구가 등록돼 있고 connector enum이 threads/stibee/instagram 셋 다 포함한다', () => {
     const tool = toolByName('describe_connector')
-    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['stibee', 'threads'])
+    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['instagram', 'stibee', 'threads'])
     expect(tool.inputSchema.required).toEqual(['connector'])
   })
 })
@@ -76,10 +94,10 @@ describe('get_threads_insights — 도구 정의 존재·계약(#3321)', () => {
 })
 
 describe('register_connector_schema / set_connector_config — 도구 정의 존재·계약(#3317)', () => {
-  test('register_connector_schema는 connector만 필수·enum이 threads/stibee 둘 다 포함', () => {
+  test('register_connector_schema는 connector만 필수·enum이 threads/stibee/instagram 셋 다 포함', () => {
     const tool = toolByName('register_connector_schema')
     expect(tool.inputSchema.required).toEqual(['connector'])
-    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['stibee', 'threads'])
+    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['instagram', 'stibee', 'threads'])
   })
 
   test('set_connector_config는 connector·config 둘 다 필수', () => {

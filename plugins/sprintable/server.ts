@@ -29,15 +29,18 @@ import {
   type UpdateEmailRequest,
 } from './connectors/stibee'
 import { publishThreadsPost, getThreadsInsightsAndRecordEvidence } from './connectors/threads'
+import { publishInstagramPost } from './connectors/instagram'
 import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
 import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
+import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { registerConnectorSchema, updateConnectorConfig, ConnectorConfigForbiddenError } from './connectors/registry'
 
 function resolveConnectorDescriptor(key: string): ConnectorDescriptor | undefined {
   if (key === 'threads') return THREADS_CONNECTOR_DESCRIPTOR
   if (key === 'stibee') return STIBEE_CONNECTOR_DESCRIPTOR
+  if (key === 'instagram') return INSTAGRAM_CONNECTOR_DESCRIPTOR
   return undefined
 }
 import { TOOL_DEFINITIONS } from './tool-definitions'
@@ -351,16 +354,54 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           throw err
         }
       }
+      case 'publish_instagram_post': {
+        const igToken = (process.env.INSTAGRAM_ACCESS_TOKEN ?? '').trim()
+        const igUserId = (process.env.INSTAGRAM_USER_ID ?? '').trim()
+        if (!igToken || !igUserId) {
+          throw new Error(
+            'INSTAGRAM_ACCESS_TOKEN/INSTAGRAM_USER_ID not configured — set them in the plugin env first',
+          )
+        }
+        // story #3312 AC5 동형: gate_id 선택, 없으면 work_item으로 조회(work_item 자체는
+        // 로깅 목적으로 항상 필수 — 스키마 required, gateId 명시 여부와 무관).
+        const gateId = args.gate_id ? String(args.gate_id) : undefined
+        const imageUrl = String(args.imageUrl ?? '')
+        const caption = args.caption ? String(args.caption) : undefined
+        const workItem = String(args.work_item ?? '')
+        if (!workItem) throw new Error('work_item is required')
+        const workItemType = args.work_item_type ? String(args.work_item_type) : undefined
+        try {
+          const result = await publishInstagramPost({
+            gateId,
+            workItemId: workItem,
+            workItemType,
+            imageUrl,
+            caption,
+            sprintableApiUrl: API_URL,
+            sprintableApiKey: API_KEY,
+            instagram: { accessToken: igToken, igUserId },
+          })
+          logEvent('instagram_publish_sent', { gate_id: gateId, work_item: workItem, media_id: result.mediaId })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof GateNotApprovedError) {
+            logEvent('instagram_publish_blocked', { gate_id: gateId, work_item: workItem, gate_status: err.gateStatus })
+          } else if (err instanceof NoGateFoundError) {
+            logEvent('instagram_publish_no_gate', { work_item: workItem })
+          }
+          throw err
+        }
+      }
       case 'describe_connector': {
         const connector = String(args.connector ?? '')
         const descriptor = resolveConnectorDescriptor(connector)
-        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', or 'instagram')`)
         return { content: [{ type: 'text', text: JSON.stringify(toWireDescriptor(descriptor)) }] }
       }
       case 'register_connector_schema': {
         const connector = String(args.connector ?? '')
         const descriptor = resolveConnectorDescriptor(connector)
-        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', or 'instagram')`)
         const result = await registerConnectorSchema(toWireDescriptor(descriptor), {
           apiUrl: API_URL, apiKey: API_KEY,
         })
@@ -370,7 +411,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'set_connector_config': {
         const connector = String(args.connector ?? '')
         const descriptor = resolveConnectorDescriptor(connector)
-        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads' or 'stibee')`)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', or 'instagram')`)
         const config = (args.config ?? {}) as Record<string, unknown>
         try {
           const result = await updateConnectorConfig(descriptor, config, { apiUrl: API_URL, apiKey: API_KEY })

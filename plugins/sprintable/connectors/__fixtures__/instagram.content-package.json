@@ -1,0 +1,26 @@
+{
+  "connector_key": "instagram",
+  "version": "1.0.0",
+  "channel": "instagram",
+  "kinds": [
+    "publish"
+  ],
+  "fields": [
+    {
+      "name": "imageUrl",
+      "type": "string",
+      "source": "content",
+      "required": true
+    },
+    {
+      "name": "caption",
+      "type": "string",
+      "source": "content",
+      "required": false
+    }
+  ],
+  "requires_env": [
+    "INSTAGRAM_ACCESS_TOKEN",
+    "INSTAGRAM_USER_ID"
+  ]
+}
