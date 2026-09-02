@@ -153,11 +153,26 @@ apart:
    present-but-undeclared).
 2. **`describe_connector`** — a new, side-effect-free MCP tool (`{connector: 'threads'|
    'stibee'}` → the descriptor as wire JSON, `toWireDescriptor()`: `connector_key`,
-   `version`, `channel`, `fields: [{name, source, required, constraints?, setup_hint?}]`).
-   The backend can't call an agent's MCP tools, so this is meant to be POSTed to an org
-   connector registry when `/sprintable:configure-threads`/`-stibee` runs — the registry
-   endpoint itself is a separate, backend-side story; this PR only ships the descriptor and
-   the read-only tool that exposes it.
+   `version`, `channel`, `fields: [{name, type, source, required, constraints?,
+   setup_hint?}]`, top-level `requires_env?: string[]`). The backend can't call an agent's
+   MCP tools, so this is meant to be POSTed to an org connector registry when
+   `/sprintable:configure-threads`/`-stibee` runs — the registry endpoint itself is a
+   separate, backend-side story (PR A, `org_connector_registry`); this PR only ships the
+   descriptor and the read-only tool that exposes it.
+
+**Credentials never travel in this descriptor.** `requiresEnv` (wire: `requires_env`) lists
+only the *names* of local-`.env` variables the connector needs (e.g.
+`['THREADS_ACCESS_TOKEN', 'THREADS_USER_ID']`) — never a value, and never declared as a
+`source: 'content'`/`'org_config'` field (which the backend's `PUT /connectors/{key}/config`
+would try to store). `hasSecretLeakInFields()` pins that those two lists stay disjoint. The
+test is: does POSTing `describe_connector`'s output to the server leak a single secret
+character — no, by construction, since the descriptor never holds one.
+
+**Dot-path field names are opaque strings to the server.** Stibee's `create.senderEmail`
+etc. are exactly the `name` string stored and validated (`PUT /connectors/{key}/config`
+rejects any key the descriptor didn't declare) — the server does not parse or nest them.
+Reassembling the dot-path into the actual nested MCP call argument (`{create: {senderEmail:
+...}}`) is the calling agent's job at publish time, not the registry's.
 
 `tool-definitions.ts` was split out of `server.ts`'s inline `ListToolsRequestSchema` handler
 specifically so it (and the schema derivation) can be unit-tested — `server.ts` runs

@@ -8,8 +8,11 @@ import {
   contentPropertiesToJsonSchema,
   contentFieldNames,
   orgConfigFields,
+  hasSecretLeakInFields,
   type ConnectorDescriptor,
 } from './connector-schema'
+import { THREADS_CONNECTOR_DESCRIPTOR } from './threads.schema'
+import { STIBEE_CONNECTOR_DESCRIPTOR } from './stibee.schema'
 
 const SAMPLE: ConnectorDescriptor = {
   connectorKey: 'sample',
@@ -21,6 +24,7 @@ const SAMPLE: ConnectorDescriptor = {
     { name: 'senderEmail', type: 'string', description: 'sender', source: 'org_config', required: true, setupHint: 'set it in org settings' },
     { name: 'create.nested', type: 'string', description: 'nested content field', source: 'content', required: true },
   ],
+  requiresEnv: ['SAMPLE_ACCESS_TOKEN'],
 }
 
 describe('toWireDescriptor (#3317 — PO 확定 wire 형상)', () => {
@@ -31,7 +35,7 @@ describe('toWireDescriptor (#3317 — PO 확定 wire 형상)', () => {
     expect(wire.channel).toBe('sample')
     const sender = wire.fields.find((f) => f.name === 'senderEmail')
     expect(sender).toEqual({
-      name: 'senderEmail', source: 'org_config', required: true, setup_hint: 'set it in org settings',
+      name: 'senderEmail', type: 'string', source: 'org_config', required: true, setup_hint: 'set it in org settings',
     })
   })
 
@@ -39,9 +43,39 @@ describe('toWireDescriptor (#3317 — PO 확定 wire 형상)', () => {
     const wire = toWireDescriptor(SAMPLE)
     const text = wire.fields.find((f) => f.name === 'text')
     expect(text).toEqual({
-      name: 'text', source: 'content', required: true, constraints: { maxLength: 500 },
+      name: 'text', type: 'string', source: 'content', required: true, constraints: { maxLength: 500 },
     })
     expect(Object.keys(text!)).not.toContain('setup_hint')
+  })
+
+  test('⭐페드루 리뷰(PR#31) — 최상위 requires_env는 이름만(값 0), wire JSON 어디에도 비밀 문자열이 없다', () => {
+    const wire = toWireDescriptor(SAMPLE)
+    expect(wire.requires_env).toEqual(['SAMPLE_ACCESS_TOKEN'])
+    // requires_env가 비어있으면 키 자체가 응답에서 빠진다(undefined 노이즈 금지, 위 pin과 동형).
+    const noEnv = toWireDescriptor({ ...SAMPLE, requiresEnv: undefined })
+    expect(Object.keys(noEnv)).not.toContain('requires_env')
+  })
+
+  test('실 커넥터 정본(threads·stibee) 둘 다 — requiresEnv 이름이 fields에 중복 선언되지 않는다(비밀 유출 0 구조 증명)', () => {
+    expect(hasSecretLeakInFields(THREADS_CONNECTOR_DESCRIPTOR)).toBe(false)
+    expect(hasSecretLeakInFields(STIBEE_CONNECTOR_DESCRIPTOR)).toBe(false)
+  })
+})
+
+describe('__fixtures__ 픽스처 드리프트 pin (#3317 PR#31 — 디디군 백엔드 PR A 파리티 테스트용)', () => {
+  // 페드루 요청: "픽스처 JSON 경로를 PR 본문에 적어두라" — 디디군 쪽 테스트가 이 JSON
+  // 파일을 그대로 읽어 백엔드 저장값과 대조한다. 이 파일들이 toWireDescriptor() 라이브
+  // 출력과 갈리면(정본이 바뀌었는데 픽스처를 안 갱신) 이 테스트가 잡는다 —
+  // connectors/__fixtures__/threads.content-package.json ·
+  // connectors/__fixtures__/stibee.content-package.json.
+  test('threads.content-package.json == toWireDescriptor(THREADS_CONNECTOR_DESCRIPTOR)', async () => {
+    const fixture = await Bun.file(new URL('./__fixtures__/threads.content-package.json', import.meta.url)).json()
+    expect(fixture).toEqual(toWireDescriptor(THREADS_CONNECTOR_DESCRIPTOR))
+  })
+
+  test('stibee.content-package.json == toWireDescriptor(STIBEE_CONNECTOR_DESCRIPTOR)', async () => {
+    const fixture = await Bun.file(new URL('./__fixtures__/stibee.content-package.json', import.meta.url)).json()
+    expect(fixture).toEqual(toWireDescriptor(STIBEE_CONNECTOR_DESCRIPTOR))
   })
 })
 

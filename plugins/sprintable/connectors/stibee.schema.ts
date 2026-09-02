@@ -50,4 +50,5 @@ export const STIBEE_CONNECTOR_DESCRIPTOR: ConnectorDescriptor = {
       setupHint: '선택 — Stibee 워크스페이스의 세그먼트 ID',
     },
   ],
+  requiresEnv: ['STIBEE_ACCESS_TOKEN'],
 }

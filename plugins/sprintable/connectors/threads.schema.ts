@@ -22,4 +22,8 @@ export const THREADS_CONNECTOR_DESCRIPTOR: ConnectorDescriptor = {
       constraints: { maxLength: 500 },
     },
   ],
+  // THREADS_APP_SECRET은 목록에 없음 — 이 커넥터의 publish 호출(threads.ts)이 실제로 읽는
+  // 값은 이 둘뿐(토큰 갱신용 APP_SECRET은 configure-threads 스킬이 같이 저장하지만
+  // 커넥터 자체가 소비하지 않는다).
+  requiresEnv: ['THREADS_ACCESS_TOKEN', 'THREADS_USER_ID'],
 }

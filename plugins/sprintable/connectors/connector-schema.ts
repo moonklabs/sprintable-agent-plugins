@@ -45,6 +45,14 @@ export interface ConnectorDescriptor {
   version: string
   channel: string
   fields: ConnectorFieldSchema[]
+  /** 자격증명(토큰·시크릿) 환경변수 **이름만** — 값은 절대 여기 안 실린다. 페드루 리뷰
+   * 정정(story #3317, 백엔드 PR A 확定): 이 descriptor는 그대로 서버(조직 커넥터
+   * 레지스트리)에 POST되므로, 시크릿은 `fields`(source='org_config')로 선언하면 안 된다
+   * — 서버가 값을 저장하려 들 수 있는 자리이기 때문. 자격증명은 플러그인 로컬 .env
+   * 전용(story #3311/#3292 M1 경계)이고, 이 목록은 "그 이름의 env가 필요하다"는 존재
+   * 신호일 뿐. 판별: describe_connector 결과를 그대로 서버에 POST해도 비밀이 한 글자도
+   * 안 넘어가나 — requiresEnv는 이름 문자열뿐이라 그 기준을 구조적으로 만족한다. */
+  requiresEnv?: string[]
 }
 
 export interface ConnectorDescriptorWire {
@@ -53,11 +61,18 @@ export interface ConnectorDescriptorWire {
   channel: string
   fields: {
     name: string
+    // 페드루 리뷰 정정(PR#31) — type을 wire에 실어야 서버 PUT /connectors/{key}/config가
+    // 값 타입(예: listId=number)을 검증할 근거가 생긴다. 이전엔 inputSchema 파생용으로만
+    // 쓰고 wire에서 떨어뜨렸었다.
+    type: 'string' | 'number' | 'array'
     source: 'content' | 'org_config'
     required: boolean
     constraints?: ConnectorFieldConstraints
     setup_hint?: string
   }[]
+  /** 자격증명 env 이름만(값 0) — connectors/connector-schema.ts 상단 ConnectorDescriptor.
+   * requiresEnv 주석 참고. */
+  requires_env?: string[]
 }
 
 /** describe_connector MCP 도구가 그대로 반환하는 wire 형상(PO 확定, snake_case). */
@@ -68,12 +83,21 @@ export function toWireDescriptor(descriptor: ConnectorDescriptor): ConnectorDesc
     channel: descriptor.channel,
     fields: descriptor.fields.map((f) => ({
       name: f.name,
+      type: f.type,
       source: f.source,
       required: f.required,
       ...(f.constraints ? { constraints: f.constraints } : {}),
       ...(f.setupHint ? { setup_hint: f.setupHint } : {}),
     })),
+    ...(descriptor.requiresEnv?.length ? { requires_env: descriptor.requiresEnv } : {}),
   }
+}
+
+/** 페드루 리뷰 정정 pin용 헬퍼 — requiresEnv에 이름을 올린 자격증명이 fields(특히
+ * source='org_config')로도 중복 선언되지 않았는지 구조적으로 확인한다. */
+export function hasSecretLeakInFields(descriptor: ConnectorDescriptor): boolean {
+  const envNames = new Set(descriptor.requiresEnv ?? [])
+  return descriptor.fields.some((f) => envNames.has(f.name))
 }
 
 export interface JsonSchemaProperties {
