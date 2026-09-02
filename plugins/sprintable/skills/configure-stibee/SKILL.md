@@ -61,7 +61,14 @@ isolation** section — it applies identically here (same file, same STATE_DIR).
    (`SPRINTABLE_API_KEY` in particular — never drop it). Write back, no quotes around
    the value.
 5. `chmod 600 "$DIR/.env"` — the token is a credential.
-6. Confirm (mask the token), then show the no-args status.
+6. **Register with the organization's connector registry** (story #3317) — call the
+   `register_connector_schema` MCP tool with `{connector: "stibee"}`. This uploads the
+   content_package schema (which fields are content vs. `org_config`, never a secret value)
+   so recipe *apply* can warn about missing org_config before publish ever runs. Idempotent
+   — safe even if already registered. If the tool isn't available yet (this session predates
+   the plugin version that added it), say so and tell the user a session restart (or
+   `/reload-plugins`) picks it up — don't treat a missing tool as a failure to retry loops on.
+7. Confirm (mask the token), then show the no-args status.
 
 ### `clear` — remove
 

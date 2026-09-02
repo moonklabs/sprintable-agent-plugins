@@ -263,4 +263,62 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    // story #3317 — 플러그인 마지막 조각. 설정 스킬(/sprintable:configure-threads·
+    // -stibee) 실행 끝에 이 도구를 불러 describe_connector와 동일한 정본을 조직
+    // 커넥터 레지스트리에 등록한다(connectors/registry.ts::registerConnectorSchema).
+    // org 멤버 아무나 호출 가능(owner/admin 불필요 — 설정 스킬을 돌리는 게 에이전트
+    // 자신이라 owner/admin 전용이면 첫 호출에서 죽는다, 페드루 리뷰①). 멱등 upsert라
+    // 여러 번 불러도 안전. 시크릿은 이 호출에 절대 안 실린다 — 정본에 requiresEnv
+    // "이름"만 있을 뿐 값은 이 플러그인 밖으로 안 나간다.
+    name: 'register_connector_schema',
+    description:
+      'Register this connector\'s content_package schema (same shape as describe_connector) ' +
+      'with the organization\'s connector registry, so the backend can validate recipe ' +
+      'apply-time readiness and resolve org_config values at publish time. Idempotent upsert ' +
+      '— safe to call every time the configure skill runs. No secrets are ever sent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        connector: {
+          type: 'string',
+          enum: ['threads', 'stibee'],
+          description: 'Which connector to register.',
+        },
+      },
+      required: ['connector'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #3317 — org_config 값 설정(발신자 이메일·리스트 ID 등, 비밀 아닌 조직 설정값
+    // 만). **owner/admin 전용** — 이 도구를 에이전트가 부르면 403이 정상 케이스다(페드루
+    // 리뷰②): 그 경우 도구가 명시 에러로 "조직 설정 화면 또는 관리자에게" 안내를 반환한다
+    // (ConnectorConfigForbiddenError). config에 requiresEnv 이름과 겹치는 키가 있으면
+    // 네트워크 호출 전에 클라이언트 쪽에서 즉시 거부(서버도 별도로 422 거부 — 이중 방어,
+    // "플러그인을 믿지 않는다"는 서버 설계 그대로).
+    name: 'set_connector_config',
+    description:
+      'Set organization-config values for a connector (e.g. sender email, list id) — never ' +
+      'secrets. Requires org owner/admin; a non-owner/admin agent gets an explicit error ' +
+      'pointing to the org settings screen or an admin, not a silent failure. The connector ' +
+      'must already be registered via register_connector_schema.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        connector: {
+          type: 'string',
+          enum: ['threads', 'stibee'],
+          description: 'Which connector to configure.',
+        },
+        config: {
+          type: 'object',
+          description: 'org_config field name → value pairs, as declared by describe_connector ' +
+            '(e.g. {"create.senderEmail": "hello@example.com"}). Never include a requires_env name here.',
+        },
+      },
+      required: ['connector', 'config'],
+      additionalProperties: false,
+    },
+  },
 ]

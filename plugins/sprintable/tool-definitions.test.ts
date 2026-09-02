@@ -74,3 +74,17 @@ describe('get_threads_insights — 도구 정의 존재·계약(#3321)', () => {
     expect(tool.inputSchema.properties.work_item_type).toBeDefined()
   })
 })
+
+describe('register_connector_schema / set_connector_config — 도구 정의 존재·계약(#3317)', () => {
+  test('register_connector_schema는 connector만 필수·enum이 threads/stibee 둘 다 포함', () => {
+    const tool = toolByName('register_connector_schema')
+    expect(tool.inputSchema.required).toEqual(['connector'])
+    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['stibee', 'threads'])
+  })
+
+  test('set_connector_config는 connector·config 둘 다 필수', () => {
+    const tool = toolByName('set_connector_config')
+    expect(tool.inputSchema.required).toEqual(['connector', 'config'])
+    expect(tool.inputSchema.properties.config).toBeDefined()
+  })
+})
