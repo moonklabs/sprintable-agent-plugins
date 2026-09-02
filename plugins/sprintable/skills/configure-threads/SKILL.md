@@ -12,6 +12,11 @@ allowed-tools:
 
 # /sprintable:configure-threads — Threads Publish Connector Setup
 
+**이 명령은 발행 담당 에이전트가 실행합니다** — 사람은 값 3개(`THREADS_ACCESS_TOKEN`·
+`THREADS_USER_ID`·`THREADS_APP_SECRET`)만 안전한 경로(1Password 공유 등)로 그 에이전트에게
+전달하면 됩니다. 아래 `.env`/`STATE_DIR`은 에이전트가 값을 저장하는 방식에 대한 구현
+설명이며, 사람이 직접 건드릴 대상이 아닙니다.
+
 story #3311([M1·마케팅자동화] Threads 발행 커넥터). Writes the Threads credentials to the
 **same** channel state dir `/sprintable:configure` already uses — `$SPRINTABLE_STATE_DIR`
 if set, otherwise `~/.claude/channels/sprintable` — as `.env`. The channel server (`server.ts`)
@@ -20,7 +25,9 @@ separate loader is needed for these keys.
 
 Before running this skill, complete the human-hands onboarding procedure — doc
 `threads-publish-channel-onboarding` (Meta 앱 생성 → Threads 테스터 계정 등록 → 액세스
-토큰 발급). It ends with exactly the three values this skill saves.
+토큰 발급; 장기 토큰·User ID는 그 문서 절차대로 **브라우저 주소창에 붙여넣기**로 받습니다
+— 터미널 불필요). 저장 흐름은 그 문서 기준으로 **"이 명령 실행 → 3개 값 입력 → 발행
+에이전트 env에 저장"** 딱 세 단계입니다.
 
 Arguments passed: `$ARGUMENTS`
 

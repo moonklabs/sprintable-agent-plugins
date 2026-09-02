@@ -93,14 +93,18 @@ access token, written to be followable by "the least capable agent") is doc
 
 The `publish_threads_post` MCP tool runs a 2-call Threads Graph API sequence — `POST
 /v1.0/{THREADS_USER_ID}/threads` (create container, `media_type=TEXT`) → `POST
-/v1.0/{THREADS_USER_ID}/threads_publish` (`creation_id`) → published post id. Same
-chokepoint pattern as Stibee: `connectors/gate-check.ts::assertGateApproved()` runs
-immediately before the `threads_publish` call and throws `GateNotApprovedError` unless
-`gate.status` is `approved`/`auto_passed` — no new gate logic, the exact same function
-Stibee uses. Container creation (draft prep) is not gated, only the irreversible last step.
-Pinned with a mutation test (`connectors/threads.test.ts`, verified locally by deleting the
-`assertGateApproved` call and confirming the pending/rejected pin tests go red, then
-restoring): the "publish never fires on pending/rejected" tests go red without it.
+/v1.0/{THREADS_USER_ID}/threads_publish` (`creation_id`) → published post id. **Two
+chokepoints** (PR#29 PO AC review — container creation is a real write to Meta, unlike
+Stibee's own-system draft prep, so it cannot go out unapproved either):
+`connectors/gate-check.ts::assertGateApproved()` runs (1) immediately on entry, before the
+rate-limit lookup or container creation — zero outbound calls to Meta while the gate isn't
+`approved`/`auto_passed` — and (2) again immediately before `threads_publish`, re-checking
+in case approval was revoked between (1) and (2). No new gate logic — same function Stibee
+uses, called twice. Pinned with two independent mutation tests
+(`connectors/threads.test.ts`, verified locally by deleting each `assertGateApproved` call
+in turn and confirming only its own tests go red, then restoring): removing chokepoint ①
+turns the "zero outbound while pending/rejected" tests red; removing chokepoint ② turns the
+race-defense test red without touching the others.
 
 Also checked before posting: text length (500-char cap, explicit error over the limit) and
 the 250-post/24h Threads publishing limit (`GET .../threads_publishing_limit`, explicit
@@ -113,6 +117,10 @@ M1 scope: dev is a mock-server dry run (`bun test`) plus explicit errors when
 (a company-owned Threads account in Meta's developer mode as a registered tester) is a
 separate, explicitly confirmed step once credentials exist; real sends beyond that are M3,
 gated on human approval same as Stibee.
+
+Applying this (or any) recipe to a project happens in **프로젝트 설정 → 워크플로우
+갤러리**, not from the event-definition catalog (`/organization/events`) itself — that
+gallery→apply gap for non-developer users is tracked separately in story #3316.
 
 ## Remaining S2 work (build)
 
