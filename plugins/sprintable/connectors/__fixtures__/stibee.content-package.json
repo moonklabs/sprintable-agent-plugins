@@ -2,6 +2,9 @@
   "connector_key": "stibee",
   "version": "1.0.0",
   "channel": "stibee",
+  "kinds": [
+    "publish"
+  ],
   "fields": [
     {
       "name": "create.subject",

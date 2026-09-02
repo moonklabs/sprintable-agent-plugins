@@ -40,10 +40,17 @@ export interface ConnectorFieldSchema {
   setupHint?: string
 }
 
+/** 커넥터가 제공하는 능력 종류 — 플랫폼 사실(무엇을 할 수 있나)이지 조직 규칙이 아니다.
+ * 페드루 요청(디디군 PR B 그라운딩, 2026-09-02): 레시피 stage가
+ * `capability:{kind:'publish'}`만 선언하고 connector_key를 안 적어도, 서버가 "이
+ * kind를 제공하는 등록 커넥터가 있나"를 볼 수 있게 최상위에 둔다. */
+export type ConnectorKind = 'publish' | 'measure'
+
 export interface ConnectorDescriptor {
   connectorKey: string
   version: string
   channel: string
+  kinds: ConnectorKind[]
   fields: ConnectorFieldSchema[]
   /** 자격증명(토큰·시크릿) 환경변수 **이름만** — 값은 절대 여기 안 실린다. 페드루 리뷰
    * 정정(story #3317, 백엔드 PR A 확定): 이 descriptor는 그대로 서버(조직 커넥터
@@ -59,6 +66,7 @@ export interface ConnectorDescriptorWire {
   connector_key: string
   version: string
   channel: string
+  kinds: ConnectorKind[]
   fields: {
     name: string
     // 페드루 리뷰 정정(PR#31) — type을 wire에 실어야 서버 PUT /connectors/{key}/config가
@@ -81,6 +89,11 @@ export function toWireDescriptor(descriptor: ConnectorDescriptor): ConnectorDesc
     connector_key: descriptor.connectorKey,
     version: descriptor.version,
     channel: descriptor.channel,
+    // 배열 복사(참조 공유 금지) — 호출부가 반환값을 sort()/push() 등으로 건드리면 그
+    // 원본 정본(threads.schema.ts 등)이 모듈 스코프에서 영구 오염된다(실제로 이 파일의
+    // 테스트 하나가 그렇게 걸려 넘어진 적 있다 — kinds.sort()가 원본을 정렬해버려 이후
+    // 테스트가 픽스처와 순서 불일치로 깨졌다).
+    kinds: [...descriptor.kinds],
     fields: descriptor.fields.map((f) => ({
       name: f.name,
       type: f.type,

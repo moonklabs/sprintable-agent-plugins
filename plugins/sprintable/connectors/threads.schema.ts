@@ -12,6 +12,9 @@ export const THREADS_CONNECTOR_DESCRIPTOR: ConnectorDescriptor = {
   connectorKey: 'threads',
   version: '1.0.0',
   channel: 'threads',
+  // 'measure' — story #3321(get_threads_insights)이 이미 배선돼 있다(플랫폼 사실: 이
+  // 커넥터가 실제로 뭘 할 수 있는지일 뿐, 스토리 착지 여부와 별개로 코드가 있으면 올린다).
+  kinds: ['publish', 'measure'],
   fields: [
     {
       name: 'text',

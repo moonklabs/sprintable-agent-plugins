@@ -15,6 +15,8 @@ export const STIBEE_CONNECTOR_DESCRIPTOR: ConnectorDescriptor = {
   connectorKey: 'stibee',
   version: '1.0.0',
   channel: 'stibee',
+  // measure 없음 — 이 커넥터엔 아직 insights/측정 도구가 배선돼 있지 않다(플랫폼 사실).
+  kinds: ['publish'],
   fields: [
     {
       name: 'create.subject', type: 'string', description: 'Email subject line — drafted per campaign.',
