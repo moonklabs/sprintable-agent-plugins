@@ -144,15 +144,29 @@ export interface PublishThreadsPostResult {
 }
 
 /**
- * 컨테이너 생성(draft 준비, 게이트 승인과 무관)→게이트 chokepoint→게시(밖으로 나가는
- * 마지막 한 걸음)의 2콜 시퀀스(doc threads-publish-channel-onboarding §6, story #3292
- * 동형). assertGateApproved가 여기서 throw하면 threads_publish는 절대 호출되지 않는다.
+ * ⭐두 chokepoint(PO AC 리뷰 정정, story #3311 PR#29 코멘트): 컨테이너 생성(POST
+ * .../threads)은 Meta 쪽에 실제로 나가는 쓰기 요청이라 — 스티비의 draft 준비(자기
+ * 시스템 내부 상태 변경)와 달리 — 게이트 승인 전에는 절대 나가면 안 된다(제품 원칙3
+ * «밖으로 나가는 건 사람 승인 뒤에서만»). 그래서:
+ *   1) 첫 chokepoint — 함수 진입 직후, 어떤 Threads 네트워크 호출(한도 조회 포함)보다도
+ *      먼저. 미승인이면 이 시점에서 outbound 호출이 정확히 0건.
+ *   2) 둘째 chokepoint — threads_publish 호출 바로 앞(stibee.ts §chokepoint 동형) —
+ *      1)과 2) 사이(한도조회+컨테이너생성)에 승인이 철회되는 레이스를 막는 재확認.
+ * 둘 중 하나라도 지우면(뮤테이션) 대응하는 pin이 RED — threads.test.ts가 각각 별도로
+ * 검증한다(2)만 지워도 1)이 여전히 최초 outbound를 막지만, 레이스 방어 테스트가 publish
+ * 호출 발생으로 RED).
  */
 export async function publishThreadsPost(
   params: PublishThreadsPostParams,
 ): Promise<PublishThreadsPostResult> {
   const textLength = [...params.text].length
   if (textLength > MAX_TEXT_LENGTH) throw new ThreadsTextTooLongError(textLength)
+
+  // ⭐chokepoint① — 한도 조회·컨테이너 생성 등 어떤 Threads 호출보다도 먼저. 미승인이면
+  // 여기서 throw — outbound(한도 조회 GET 포함) 정확히 0건.
+  await assertGateApproved(
+    params.gateId, params.sprintableApiUrl, params.sprintableApiKey, params.gateCheckFetchImpl,
+  )
 
   const limit = await threadsGetPublishingLimit(params.threads)
   if (limit.quotaUsage >= limit.quotaTotal) {
@@ -161,9 +175,9 @@ export async function publishThreadsPost(
 
   const { id: creationId } = await threadsCreateContainer(params.text, params.threads)
 
-  // ⭐chokepoint — threads_publish 호출 바로 앞의 마지막 줄(story #3311, stibee.ts
-  // §chokepoint 동형). 이 줄을 지우거나 위로 옮기면(뮤테이션) pending/rejected 게이트로도
-  // 게시가 나가야 정상 — threads.test.ts가 그 갈림을 pin한다.
+  // ⭐chokepoint② — threads_publish 호출 바로 앞의 마지막 줄(레이스 방어: ①과 이 사이에
+  // 승인이 철회됐을 수 있다). 이 줄을 지우거나 위로 옮기면(뮤테이션) ①통과 후 철회된
+  // 게이트로도 게시가 나가야 정상 — threads.test.ts가 그 갈림을 pin한다.
   await assertGateApproved(
     params.gateId, params.sprintableApiUrl, params.sprintableApiKey, params.gateCheckFetchImpl,
   )

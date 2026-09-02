@@ -1,9 +1,9 @@
 /**
- * story #3311 — ⭐핵심 pin(PO AC): "게이트 없이는 발송 안 나간다"를 end-to-end로 증명한다
- * (stibee.test.ts #3292 동형). 한도조회→컨테이너생성→(chokepoint)→게시 전 사이클에서,
- * gate.status가 pending/rejected면 POST .../threads_publish가 **한 번도 호출되지
- * 않아야** 한다 — 컨테이너 생성(draft 준비)은 게이트와 무관하게 진행되지만, 밖으로
- * 나가는 마지막 한 걸음만 막힌다.
+ * story #3311 — ⭐핵심 pin(PO AC 리뷰 정정, PR#29 코멘트): "게이트 없이는 Meta로 단
+ * 하나의 요청도 안 나간다"를 end-to-end로 증명한다. 스티비(#3292)와 달리 컨테이너
+ * 생성(POST .../threads)은 Meta 쪽 실제 쓰기 요청이라 draft 준비 취급이 아니다 — 두
+ * chokepoint(①함수 진입 직후=한도조회보다도 먼저, ②publish 직전=레이스 방어)가 각각
+ * pin 대상이다.
  */
 import { describe, test, expect } from 'bun:test'
 import {
@@ -40,6 +40,16 @@ function gateCheckSpy(status: string) {
   return (async () => new Response(JSON.stringify({ status }), { status: 200 })) as unknown as typeof fetch
 }
 
+/** 레이스 방어 테스트 전용 — 호출마다 순서대로 다른 status를 준다(소진되면 마지막 값 반복). */
+function gateCheckSequenceSpy(statuses: string[]) {
+  let i = 0
+  return (async () => {
+    const status = statuses[Math.min(i, statuses.length - 1)]
+    i += 1
+    return new Response(JSON.stringify({ status }), { status: 200 })
+  }) as unknown as typeof fetch
+}
+
 function threadsConfig(fetchImpl: typeof fetch, overrides: { accessToken?: string; userId?: string } = {}) {
   return { accessToken: overrides.accessToken ?? 'threads-token', userId: overrides.userId ?? '17841400000000000', fetchImpl }
 }
@@ -69,7 +79,7 @@ describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
     expect(calls.filter((c) => c.url.includes('/threads_publish?'))).toHaveLength(1)
   })
 
-  test('⭐gate.status=pending — threads_publish가 단 한 번도 호출되지 않는다(핵심 pin)', async () => {
+  test('⭐gate.status=pending — Meta로 단 하나의 요청도 안 나간다(핵심 pin, chokepoint①)', async () => {
     const { calls, fetchImpl } = threadsSpy()
     await expect(
       publishThreadsPost({
@@ -79,10 +89,13 @@ describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
         gateCheckFetchImpl: gateCheckSpy('pending'),
       }),
     ).rejects.toThrow(GateNotApprovedError)
-    expect(calls.filter((c) => c.method === 'POST' && c.url.includes('/threads_publish?'))).toHaveLength(0)
+    // 한도조회(GET)도, 컨테이너 생성(POST)도 — 전부 0건. 미승인 상태에서 Meta 쪽으로
+    // 나가는 outbound가 정확히 0이라는 게 PO AC 리뷰가 요구한 것(레거시: 컨테이너 생성이
+    // "draft 준비"로 취급돼 먼저 나가던 결함).
+    expect(calls).toHaveLength(0)
   })
 
-  test('⭐gate.status=rejected — threads_publish가 단 한 번도 호출되지 않는다(핵심 pin)', async () => {
+  test('⭐gate.status=rejected — Meta로 단 하나의 요청도 안 나간다(핵심 pin, chokepoint①)', async () => {
     const { calls, fetchImpl } = threadsSpy()
     await expect(
       publishThreadsPost({
@@ -92,20 +105,23 @@ describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
         gateCheckFetchImpl: gateCheckSpy('rejected'),
       }),
     ).rejects.toThrow(GateNotApprovedError)
-    expect(calls.filter((c) => c.method === 'POST' && c.url.includes('/threads_publish?'))).toHaveLength(0)
+    expect(calls).toHaveLength(0)
   })
 
-  test('gate가 pending이어도 컨테이너 생성(draft 준비)은 이미 진행된다 — chokepoint는 publish 전용', async () => {
+  test('⭐레이스 방어(chokepoint②) — ①통과 뒤 승인이 철회되면 한도조회·컨테이너 생성은 이미 나갔어도 publish는 절대 안 나간다', async () => {
     const { calls, fetchImpl } = threadsSpy()
     await expect(
       publishThreadsPost({
         gateId: 'gate-1', text: 'hello threads',
         sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
         threads: threadsConfig(fetchImpl),
-        gateCheckFetchImpl: gateCheckSpy('pending'),
+        // 1번째 게이트조회(①)=approved → 통과. 2번째(②, publish 직전)=rejected(철회) → 차단.
+        gateCheckFetchImpl: gateCheckSequenceSpy(['approved', 'rejected']),
       }),
     ).rejects.toThrow(GateNotApprovedError)
-    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads') && !c.url.includes('_publish'))).toBe(true)
+    expect(calls.some((c) => c.url.includes('/threads_publishing_limit'))).toBe(true)
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads?'))).toBe(true)
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads_publish?'))).toBe(false)
   })
 
   test('컨테이너 생성은 media_type=TEXT·text를 JSON body로 싣는다(실측 계약 pin)', async () => {
