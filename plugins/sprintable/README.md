@@ -134,6 +134,36 @@ hasn't created a gate yet — `NoGateFoundError`, distinct from `GateNotApproved
 savings as the explicit path: the list response already carries `status`, so no follow-up
 `GET /api/v2/gates/{id}` call is needed.
 
+### content_package schema — `describe_connector` (#3317)
+
+A connector declares what its publish call actually needs as a canonical descriptor
+(`connectors/threads.schema.ts`, `connectors/stibee.schema.ts` — `ConnectorDescriptor` from
+`connectors/connector-schema.ts`), splitting every field into `source: 'content'` (comes
+from the work item — post text, email subject/HTML) or `source: 'org_config'` (comes from
+that organization's own settings — sender email, Stibee list id; never a Moonklabs
+constant, only a slot). This single descriptor feeds two consumers so they can't drift
+apart:
+
+1. **`tool-definitions.ts`** — `contentPropertiesToJsonSchema()` mechanically derives the
+   `content`-sourced, non-nested properties (Threads' `text`) straight into the MCP tool's
+   `inputSchema`; nothing is hand-duplicated there. Stibee's content/org_config fields live
+   inside the nested `create` object, so that part of `inputSchema` stays hand-authored, but
+   `tool-definitions.test.ts` diffs the descriptor against the actual (not copied)
+   `TOOL_DEFINITIONS` array and fails on any drift either direction (declared-but-missing or
+   present-but-undeclared).
+2. **`describe_connector`** — a new, side-effect-free MCP tool (`{connector: 'threads'|
+   'stibee'}` → the descriptor as wire JSON, `toWireDescriptor()`: `connector_key`,
+   `version`, `channel`, `fields: [{name, source, required, constraints?, setup_hint?}]`).
+   The backend can't call an agent's MCP tools, so this is meant to be POSTed to an org
+   connector registry when `/sprintable:configure-threads`/`-stibee` runs — the registry
+   endpoint itself is a separate, backend-side story; this PR only ships the descriptor and
+   the read-only tool that exposes it.
+
+`tool-definitions.ts` was split out of `server.ts`'s inline `ListToolsRequestSchema` handler
+specifically so it (and the schema derivation) can be unit-tested — `server.ts` runs
+`mcp.connect()`/SSE dial-out as a module-load side effect, so it can never be `import`ed
+directly by a test.
+
 Applying this (or any) recipe to a project happens in **프로젝트 설정 → 워크플로우
 갤러리**, not from the event-definition catalog (`/organization/events`) itself — that
 gallery→apply gap for non-developer users is tracked separately in story #3316.
