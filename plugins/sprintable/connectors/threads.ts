@@ -18,6 +18,7 @@
  * chokepoint를 강제한다(dry-run 여부는 호출부/환경 문제, 이 모듈이 판단하지 않는다).
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
+import { recordEvidence } from './evidence'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -215,4 +216,64 @@ export async function publishThreadsPost(
 
   const { id: postId } = await threadsPublishContainer(creationId, params.threads)
   return { postId }
+}
+
+export interface GetThreadsInsightsAndRecordEvidenceParams {
+  postId: string
+  workItemId: string
+  /** 기본 'story'(threads.ts 나머지 함수와 동형 — 오타 방지 목적일 뿐 조직 규칙 아님). */
+  workItemType?: string
+  sprintableApiUrl: string
+  sprintableApiKey: string
+  threads: ThreadsClientConfig
+  /** 테스트 전용 — evidence 기록 호출에 넘길 fetch 스파이(Threads insights 호출용
+   * fetch와 별개 — 두 시스템에 각각 나가므로 스파이도 갈라야 시퀀스를 정확히 pin한다). */
+  evidenceFetchImpl?: typeof fetch
+}
+
+export interface GetThreadsInsightsAndRecordEvidenceResult extends ThreadsInsights {
+  /** 이 도구는 성공/실패 "판단"을 하지 않는다(story #3321 경계) — evidenceRecorded는
+   * "기록이 됐다/안 됐다"는 사실 보고일 뿐, 지표 자체의 좋고 나쁨과 무관하다. */
+  evidenceRecorded: boolean
+  evidenceId?: string
+  /** evidenceRecorded===false일 때만 채워진다 — 조용한 성공 금지(PO 리뷰 못박음①). */
+  evidenceError?: string
+}
+
+/**
+ * story #3321([M5·마케팅자동화] measure 단계 도구) — insights 조회 + evidence 기록을
+ * 한 호출로 묶는다. publishThreadsPost가 "게이트확인+게시"를 한 호출로 묶은 것과 동형
+ * 이유: "측정은 했는데 기록을 깜빡" 갭(전달≠도착 교훈)을 구조로 막는다.
+ *
+ * 순서: ① insights 조회 실패 → 그 자리에서 throw, evidence 호출 0건(원자성 — 아직 잴
+ * 것도 없는데 기록부터 만들면 안 된다). ② insights 성공 → evidence 기록 시도 — 성공하면
+ * evidenceRecorded:true+evidenceId, **실패해도 지표는 그대로 반환**하되
+ * evidenceRecorded:false+evidenceError로 명시(PO 리뷰 못박음① — 조용한 성공 금지).
+ * 응답에 verdict/success 류 판정 필드는 절대 없다(못박음②) — 목표값은 work item의
+ * success_hypothesis가 조직 몫으로 갖는다.
+ */
+export async function getThreadsInsightsAndRecordEvidence(
+  params: GetThreadsInsightsAndRecordEvidenceParams,
+): Promise<GetThreadsInsightsAndRecordEvidenceResult> {
+  if (!params.workItemId) {
+    throw new Error('getThreadsInsightsAndRecordEvidence requires workItemId (evidence attribution)')
+  }
+
+  const insights = await threadsGetInsights(params.postId, params.threads)
+
+  try {
+    const { id } = await recordEvidence({
+      workItemId: params.workItemId,
+      workItemType: params.workItemType ?? DEFAULT_WORK_ITEM_TYPE,
+      type: 'metric',
+      ref: params.postId,
+      note: JSON.stringify({ ...insights, measured_at: new Date().toISOString() }),
+      apiUrl: params.sprintableApiUrl,
+      apiKey: params.sprintableApiKey,
+      fetchImpl: params.evidenceFetchImpl,
+    })
+    return { ...insights, evidenceRecorded: true, evidenceId: id }
+  } catch (err) {
+    return { ...insights, evidenceRecorded: false, evidenceError: err instanceof Error ? err.message : String(err) }
+  }
 }

@@ -64,3 +64,13 @@ describe('describe_connector — 도구 정의 존재·계약', () => {
     expect(tool.inputSchema.required).toEqual(['connector'])
   })
 })
+
+describe('get_threads_insights — 도구 정의 존재·계약(#3321)', () => {
+  test('get_threads_insights 도구가 등록돼 있고 post_id·work_item이 필수다', () => {
+    const tool = toolByName('get_threads_insights')
+    expect(tool.inputSchema.required).toEqual(['post_id', 'work_item'])
+    expect(tool.inputSchema.properties.post_id).toBeDefined()
+    expect(tool.inputSchema.properties.work_item).toBeDefined()
+    expect(tool.inputSchema.properties.work_item_type).toBeDefined()
+  })
+})
