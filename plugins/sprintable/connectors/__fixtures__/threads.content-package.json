@@ -2,6 +2,10 @@
   "connector_key": "threads",
   "version": "1.0.0",
   "channel": "threads",
+  "kinds": [
+    "publish",
+    "measure"
+  ],
   "fields": [
     {
       "name": "text",

@@ -153,8 +153,13 @@ apart:
    present-but-undeclared).
 2. **`describe_connector`** — a new, side-effect-free MCP tool (`{connector: 'threads'|
    'stibee'}` → the descriptor as wire JSON, `toWireDescriptor()`: `connector_key`,
-   `version`, `channel`, `fields: [{name, type, source, required, constraints?,
-   setup_hint?}]`, top-level `requires_env?: string[]`). The backend can't call an agent's
+   `version`, `channel`, `kinds: ('publish'|'measure')[]`, `fields: [{name, type, source,
+   required, constraints?, setup_hint?}]`, top-level `requires_env?: string[]`). `kinds` is
+   a platform fact (what the connector can actually do, not an org rule) so a recipe stage
+   can declare `capability: {kind: 'publish'}` without naming a `connector_key` and the
+   backend can find a registered connector that offers that kind — Threads is `['publish',
+   'measure']` (get_threads_insights shipped in #3321), Stibee is `['publish']` only (no
+   measure tool yet). The backend can't call an agent's
    MCP tools, so this is meant to be POSTed to an org connector registry when
    `/sprintable:configure-threads`/`-stibee` runs — the registry endpoint itself is a
    separate, backend-side story (PR A, `org_connector_registry`); this PR only ships the
