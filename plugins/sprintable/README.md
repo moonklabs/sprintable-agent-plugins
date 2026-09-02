@@ -56,16 +56,22 @@ design-3292`.
 
 The `publish_stibee_campaign` MCP tool runs a 4-call Stibee v2 sequence — `POST /v2/emails`
 (create draft) → `POST /v2/emails/{id}/content` (HTML body, `text/html` raw) → optional
-`PUT /v2/emails/{id}` (metadata) → `POST /v2/emails/{id}/send`. **The `send` call is
-gated**: `connectors/gate-check.ts::assertGateApproved()` calls `GET /api/v2/gates/{gate_id}`
-immediately before it and throws `GateNotApprovedError` unless `gate.status` is `approved`
-or `auto_passed` — draft prep (create/content/update) is not gated, only the irreversible
-last step. Calling the tool is not itself authorization; the external_publish Gate
-(#3689, always-manual regardless of org posture) is the actual chokepoint, re-checked
-every call rather than trusted from whatever triggered the call (SSE notification, task
-state, etc. — signal, not proof). Pinned with a mutation test (`connectors/stibee.test.ts`):
-delete the `assertGateApproved` call and the "send never fires on pending/rejected" tests
-go red.
+`PUT /v2/emails/{id}` (metadata) → `POST /v2/emails/{id}/send`. **Two chokepoints** (story
+6f2034cf, 2026-09-02 fix — the original design gated only `send`, on the assumption that
+create/content/update were "draft prep, own-system state" and thus ungated; that assumption
+was wrong — those calls are real writes to the Stibee account the moment they fire, so
+nothing should go out while the gate isn't approved, same principle Threads already applied):
+`connectors/gate-check.ts::assertGateApproved()` runs (1) immediately on entry, before
+`stibeeCreateEmail` or any other Stibee call — zero outbound while the gate isn't
+`approved`/`auto_passed` — and (2) again immediately before `send`, re-checking in case
+approval was revoked between (1) and (2). Calling the tool is not itself authorization; the
+external_publish Gate (#3689, always-manual regardless of org posture) is the actual
+chokepoint, re-checked every call rather than trusted from whatever triggered the call (SSE
+notification, task state, etc. — signal, not proof). Pinned with two independent mutation
+tests (`connectors/stibee.test.ts`, verified locally by deleting each `assertGateApproved`
+call in turn and confirming only its own tests go red, then restoring): removing chokepoint
+① turns the "zero outbound while pending/rejected" tests red; removing chokepoint ② turns
+the race-defense test red without touching the others.
 
 M1 scope: dev/e2e is sandbox or a company test account only — real-account sends are M3,
 gated on a separate human approval. Credentials are local-`.env` (same file as
@@ -94,8 +100,8 @@ access token, written to be followable by "the least capable agent") is doc
 The `publish_threads_post` MCP tool runs a 2-call Threads Graph API sequence — `POST
 /v1.0/{THREADS_USER_ID}/threads` (create container, `media_type=TEXT`) → `POST
 /v1.0/{THREADS_USER_ID}/threads_publish` (`creation_id`) → published post id. **Two
-chokepoints** (PR#29 PO AC review — container creation is a real write to Meta, unlike
-Stibee's own-system draft prep, so it cannot go out unapproved either):
+chokepoints** (PR#29 PO AC review — container creation is a real write to Meta, so it
+cannot go out unapproved; Stibee later adopted the same two-chokepoint shape, see below):
 `connectors/gate-check.ts::assertGateApproved()` runs (1) immediately on entry, before the
 rate-limit lookup or container creation — zero outbound calls to Meta while the gate isn't
 `approved`/`auto_passed` — and (2) again immediately before `threads_publish`, re-checking
@@ -117,6 +123,28 @@ M1 scope: dev is a mock-server dry run (`bun test`) plus explicit errors when
 (a company-owned Threads account in Meta's developer mode as a registered tester) is a
 separate, explicitly confirmed step once credentials exist; real sends beyond that are M3,
 gated on human approval same as Stibee.
+
+### Common contract for all publish connectors (story 6f2034cf)
+
+Every connector wired to an `external_publish` gate — Stibee, Threads, and any future
+channel — follows the same two-chokepoint shape, not a per-connector judgment call:
+
+1. **Chokepoint ① fires before the first external write**, not after some subset of calls
+   deemed "prep." There is no such thing as a write that "doesn't count" because it's early
+   in the sequence or stays inside the target platform's own account — the moment any call
+   leaves the process and reaches the external service, it needs the gate to already be
+   approved. (Stibee's original design got this wrong: `create`/`content`/`update` were
+   treated as ungated "draft prep" until story 6f2034cf's fix — see above.)
+2. **Chokepoint ② re-checks immediately before the last, irreversible call** (send / publish),
+   independently of ①, to catch approval being revoked in the window between the two.
+3. Both chokepoints call the same `connectors/gate-check.ts` functions
+   (`assertGateApproved` / `assertGateApprovedForWorkItem`) — no connector invents its own
+   gate logic.
+4. Each chokepoint is pinned by its own mutation test: delete it, confirm only the tests
+   that depend on it go red, restore, confirm green again. One combined test is not
+   sufficient — a connector that loses chokepoint① while keeping ② would still pass a
+   test that only checks "the last call didn't fire," while sending unapproved external
+   writes with every call before it.
 
 ### Gate resolution without a gate_id (#3312 AC5)
 

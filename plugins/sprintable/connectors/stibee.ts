@@ -152,11 +152,19 @@ async function assertPublishGateApproved(params: PublishStibeeCampaignParams): P
 }
 
 /**
- * draft 준비(create→content→update)는 게이트 승인과 무관하게 항상 진행된다 — "밖으로
- * 나가는" 마지막 한 걸음(send)만 chokepoint 대상이다(doc §③, story #3311 PR#29에서
- * PO가 Threads엔 이 가정이 안 맞다고 정정했지만 스티비의 같은 클래스는 별도 스토리로
- * 스코프 밖 확定 — 이 파일은 손 안 댄다). gateId·workItemId 부재 체크는 draft 준비보다도
- * 먼저다(둘 다 없으면 그 자리에서 즉시 에러, 스티비 호출 0건).
+ * story 6f2034cf(2026-09-02, PO 확定) — 두 chokepoint로 정정(threads.ts §PR#29 PO AC
+ * 리뷰와 동형 배치로 통일). 예전 가정("draft 준비=create→content→update는 게이트와
+ * 무관하게 항상 진행, send만 chokepoint")은 스티비도 예외가 아니었다 — create/content/
+ * update 전부 스티비 시스템에 실제로 남는 외부 쓰기(POST/PUT)라 "자기 시스템 내부 상태
+ * 변경"이 아니다(그 draft가 실제로 스티비 계정에 생성되는 순간 이미 그 조직 밖으로
+ * 나간 것 — 미승인 상태에서 이 정도의 부작용조차 없어야 한다는 게 제품 원칙3 「밖으로
+ * 나가는 건 사람 승인 뒤에서만」의 정확한 요구).
+ *   1) 첫 chokepoint — 함수 진입 직후, 어떤 스티비 호출(create 포함)보다도 먼저.
+ *      미승인이면 이 시점에서 outbound 호출이 정확히 0건.
+ *   2) 둘째 chokepoint — send 호출 바로 앞(threads.ts와 동형) — 1)과 2) 사이(create→
+ *      content→update)에 승인이 철회되는 레이스를 막는 재확認.
+ * gateId·workItemId 부재 체크는 그보다도 먼저다(둘 다 없으면 그 자리에서 즉시 에러,
+ * 스티비 호출 0건 — 파라미터 형태 검증은 게이트 조회 자체보다 싸다).
  */
 export async function publishStibeeCampaign(
   params: PublishStibeeCampaignParams,
@@ -165,15 +173,20 @@ export async function publishStibeeCampaign(
     throw new Error('publishStibeeCampaign requires either gateId or workItemId to check the external_publish gate')
   }
 
+  // ⭐chokepoint① — create/content/update 등 어떤 스티비 호출보다도 먼저. 미승인이면
+  // 여기서 throw — outbound 정확히 0건. 이 줄을 지우거나 아래로 옮기면(뮤테이션)
+  // pending/rejected 게이트로도 create가 나가야 정상 — stibee.test.ts가 그 갈림을 pin한다.
+  await assertPublishGateApproved(params)
+
   const { id } = await stibeeCreateEmail(params.content.create, params.stibee)
   await stibeeSetContent(id, params.content.html, params.stibee)
   if (params.content.update) {
     await stibeeUpdateEmail(id, params.content.update, params.stibee)
   }
 
-  // ⭐chokepoint — send 호출 바로 앞의 마지막 줄(doc §③, PO 리뷰 확인 포인트). 이 줄을
-  // 지우거나 위로 옮기면(뮤테이션) pending/rejected 게이트로도 send가 나가야 정상 —
-  // stibee.test.ts가 그 갈림을 pin한다.
+  // ⭐chokepoint② — send 호출 바로 앞의 마지막 줄(레이스 방어: ①과 이 사이에 승인이
+  // 철회됐을 수 있다). 이 줄을 지우거나 위로 옮기면(뮤테이션) ①통과 후 철회된 게이트로도
+  // send가 나가야 정상 — stibee.test.ts가 그 갈림을 pin한다.
   await assertPublishGateApproved(params)
 
   await stibeeSendEmail(id, params.stibee)
