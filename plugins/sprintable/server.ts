@@ -32,6 +32,7 @@ import { publishThreadsPost, getThreadsInsightsAndRecordEvidence } from './conne
 import { publishInstagramPost } from './connectors/instagram'
 import { publishSitePost } from './connectors/site_git'
 import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
+import { assertExternalPublishNotFrozen } from './connectors/publish-freeze'
 import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
@@ -246,6 +247,15 @@ async function requestApproval(
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
   try {
+    // ⭐story #3366 — 공통 publish guard. switch 진입 전, 어떤 case 블록의 credential
+    // 읽기(process.env.*)·게이트 조회보다도 먼저. 이름 접두 기반이라 이 파일에 새
+    // `publish_*` 케이스가 추가돼도(PO 보정 AC4) 자동으로 덮는다 — 개별 도구를
+    // 열거하지 않는다. 뮤테이션 표적: 이 블록을 지우거나 switch 뒤로 옮기면 각 커넥터
+    // 단위 테스트(연결된 chokepoint②)는 여전히 잡지만, server.ts 경유 호출의 outbound
+    // 0건 보장은 깨진다 — 커넥터별 두 번째(함수 최초 줄) guard가 defense-in-depth로 남는다.
+    if (req.params.name.startsWith('publish_')) {
+      assertExternalPublishNotFrozen(req.params.name)
+    }
     switch (req.params.name) {
       case 'reply': {
         const text = args.text as string

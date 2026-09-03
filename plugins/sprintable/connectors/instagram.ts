@@ -24,6 +24,7 @@
  * 자체는 축 무관하게 항상 chokepoint를 강제한다.
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
+import { assertExternalPublishNotFrozen } from './publish-freeze'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -130,6 +131,11 @@ async function assertPublishGateApproved(params: PublishInstagramPostParams): Pr
 export async function publishInstagramPost(
   params: PublishInstagramPostParams,
 ): Promise<PublishInstagramPostResult> {
+  // ⭐story #3366(PO 보정 — publish_* 3종 외 발견된 도구도 동결 대상) — 함수의 가장
+  // 첫 줄. 뮤테이션 표적: 이 줄을 아래로 옮기면 fetch spy가 0을 벗어나야 정상 —
+  // instagram.test.ts가 그 갈림을 pin한다.
+  assertExternalPublishNotFrozen('publish_instagram_post')
+
   if (!params.gateId && !params.workItemId) {
     throw new Error('publishInstagramPost requires either gateId or workItemId to check the external_publish gate')
   }

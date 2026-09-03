@@ -116,6 +116,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // tool-definitions.test.ts로 드리프트 대조된다.
     name: 'publish_stibee_campaign',
     description:
+      '⚠️FROZEN (story #3366): calling this immediately throws EXTERNAL_PUBLISH_MOVED_TO_PLATFORM ' +
+      'before any credential/gate lookup or HTTP request — submit the draft and publish from the ' +
+      'Sprintable screen instead. Kept only for discoverability; not executable. ' +
       'Publish an email campaign via Stibee (create draft → set HTML content → optional ' +
       'metadata update → send), gated on an approved external_publish Gate. Pass either ' +
       'gate_id (explicit) or work_item (resolves the latest external_publish gate for that ' +
@@ -184,6 +187,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // 기계적으로 파생 — 아래 스프레드가 정본, 손으로 따로 안 쓴다.
     name: 'publish_threads_post',
     description:
+      '⚠️FROZEN (story #3366): calling this immediately throws EXTERNAL_PUBLISH_MOVED_TO_PLATFORM ' +
+      'before any credential/gate lookup or HTTP request — submit the draft and publish from the ' +
+      'Sprintable screen instead. Kept only for discoverability; not executable. ' +
       'Publish a text post to Threads (create container → publish), gated on an approved ' +
       'external_publish Gate. Pass gate_id explicitly, or omit it to resolve the latest ' +
       'external_publish gate for work_item instead. The publish call is blocked unless the ' +
@@ -227,6 +233,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // instagram.schema.ts)에서 기계적으로 파생 — 손으로 따로 안 쓴다.
     name: 'publish_instagram_post',
     description:
+      '⚠️FROZEN (story #3366): calling this immediately throws EXTERNAL_PUBLISH_MOVED_TO_PLATFORM ' +
+      'before any credential/gate lookup or HTTP request — submit the draft and publish from the ' +
+      'Sprintable screen instead. Kept only for discoverability; not executable. ' +
       'Publish an image post to Instagram (create media container → publish), gated on an ' +
       'approved external_publish Gate. Pass gate_id explicitly, or omit it to resolve the ' +
       'latest external_publish gate for work_item instead. The publish call is blocked unless ' +
@@ -274,6 +283,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // (connectors/site_git.schema.ts)에서 기계적으로 파생 — 손으로 따로 안 쓴다.
     name: 'publish_site_post',
     description:
+      '⚠️FROZEN (story #3366): calling this immediately throws EXTERNAL_PUBLISH_MOVED_TO_PLATFORM ' +
+      'before any credential/gate lookup or HTTP request — submit the draft and publish from the ' +
+      'Sprintable screen instead. Kept only for discoverability; not executable. ' +
       'Commit an approved blog post as a markdown file to the organization\'s configured ' +
       'static-site git repo (GitHub Contents API), gated on an approved external_publish Gate. ' +
       'Pass gate_id explicitly, or omit it to resolve the latest external_publish gate for ' +

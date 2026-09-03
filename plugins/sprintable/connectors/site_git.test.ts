@@ -3,10 +3,18 @@
  * GitHub으로 단 하나의 요청도 안 나간다"를 end-to-end로 증명한다. 두 chokepoint
  * (①함수 진입 직후=sha 조회보다도 먼저, ②커밋 PUT 직전=레이스 방어)가 각각 pin
  * 대상 — story 6f2034cf "공통 계약"을 이 커넥터도 처음부터 그대로 따른다.
+ *
+ * [[Phase0·마케팅운영] 기존 발행 도구는 남아 있지만 모든 외부 요청 전에 플랫폼 이관
+ * 오류로 멈춘다](entity:story:0da62f78-b244-4c7e-bac1-4b72547894f0) 동결로 도달 불가·
+ * Phase 1 서버 어댑터 이관 시 계약 pin으로 참고·해제 시 skip 제거 (PO 리뷰, PR#39).
+ * slug/lang 경로 조작 방어(assertSlugAndLangShape)는 재사용 가치가 있는 순수 검증
+ * 로직이라 site_git.ts에서 export해 이 파일 맨 아래에서 publishSitePost를 거치지 않고
+ * 직접 단위 테스트한다(스킵 대상 아님).
  */
 import { describe, test, expect } from 'bun:test'
-import { publishSitePost, buildSitePostFile, SlugOrLangInvalidError } from './site_git'
+import { publishSitePost, buildSitePostFile, assertSlugAndLangShape, SlugOrLangInvalidError } from './site_git'
 import { GateNotApprovedError, NoGateFoundError } from './gate-check'
+import { ExternalPublishMovedToPlatformError } from './publish-freeze'
 
 /** GitHub Contents API 쪽 fetch 스파이 — 실제로 나간 (method, url) 쌍을 전부 기록한다.
  * 기본은 "기존 파일 없음"(sha 조회 404) — 신규 파일 생성 경로. */
@@ -68,7 +76,7 @@ const BASE_PARAMS = {
   sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
 }
 
-describe('publishSitePost — chokepoint end-to-end (story a32c9f1a)', () => {
+describe.skip('publishSitePost — chokepoint end-to-end (story a32c9f1a) [SKIP: frozen by #3366, unreachable]', () => {
   test('gate.status=approved — 신규 파일 커밋이 실제로 나간다(양성대조)', async () => {
     const { calls, fetchImpl } = githubSpy()
     const result = await publishSitePost({
@@ -210,7 +218,7 @@ describe('publishSitePost — chokepoint end-to-end (story a32c9f1a)', () => {
   })
 })
 
-describe('publishSitePost — work_item 경로(#3312 AC5 동형, gate_id 없이 조회)', () => {
+describe.skip('publishSitePost — work_item 경로(#3312 AC5 동형, gate_id 없이 조회) [SKIP: frozen by #3366, unreachable]', () => {
   test('gateId 없이 workItemId만 줘도 approved면 커밋이 나간다', async () => {
     const { calls, fetchImpl } = githubSpy()
     const result = await publishSitePost({
@@ -337,8 +345,30 @@ describe('buildSitePostFile — frontmatter 직렬화(계약 SSOT)', () => {
   })
 })
 
-describe('publishSitePost — slug/lang 경로 조작 방어(story a32c9f1a, PR#37 PO 리뷰)', () => {
-  test('⭐slug에 경로 조작 문자열(traversal) — GitHub 호출도 게이트 조회도 0건, chokepoint①보다 먼저 막힌다', async () => {
+describe('assertSlugAndLangShape — slug/lang 경로 조작 방어(story a32c9f1a, PR#37 PO 리뷰) — 동결 대상 아님(순수 함수, story #3366 이후 publishSitePost를 거치지 않고 직접 검증)', () => {
+  test('⭐slug에 경로 조작 문자열(traversal)은 SlugOrLangInvalidError', () => {
+    expect(() => assertSlugAndLangShape('../../.github/workflows/x', 'ko')).toThrow(SlugOrLangInvalidError)
+  })
+
+  test('lang에 경로 조작 문자열(traversal)도 동일하게 거부된다', () => {
+    expect(() => assertSlugAndLangShape('hello-world', '../../etc')).toThrow(SlugOrLangInvalidError)
+  })
+
+  test('대문자·공백·언더스코어 등 규격 밖 slug도 거부된다', () => {
+    for (const badSlug of ['Hello-World', 'hello_world', 'hello world', '-leading-dash', 'trailing-dash-', '']) {
+      expect(() => assertSlugAndLangShape(badSlug, 'ko')).toThrow(SlugOrLangInvalidError)
+    }
+  })
+
+  test('정상 slug(hello-world)·lang(ko, en-US)은 통과한다(양성대조 — 과잉차단 아님)', () => {
+    for (const lang of ['ko', 'en', 'en-US']) {
+      expect(() => assertSlugAndLangShape('hello-world', lang)).not.toThrow()
+    }
+  })
+})
+
+describe('publishSitePost — frozen (story #3366 Phase0 external-publish freeze)', () => {
+  test('⭐AC1/AC2 — 승인된 gate여도 즉시 EXTERNAL_PUBLISH_MOVED_TO_PLATFORM, GitHub·게이트 조회 outbound 0건', async () => {
     const { calls, fetchImpl } = githubSpy()
     let gateCheckCalled = false
     const gateCheckFetchImpl = (async () => {
@@ -348,49 +378,61 @@ describe('publishSitePost — slug/lang 경로 조작 방어(story a32c9f1a, PR#
 
     await expect(
       publishSitePost({
-        ...BASE_PARAMS, gateId: 'gate-1', slug: '../../.github/workflows/x',
+        ...BASE_PARAMS, gateId: 'gate-1',
         siteGit: siteGitConfig(fetchImpl),
         gateCheckFetchImpl,
       }),
-    ).rejects.toThrow(SlugOrLangInvalidError)
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
     expect(calls).toHaveLength(0)
     expect(gateCheckCalled).toBe(false)
   })
 
-  test('lang에 경로 조작 문자열(traversal) — 동일하게 0건', async () => {
+  test('⭐AC3 — work_item 경로(#3312 AC5 동형)로 줘도 동결은 그대로, outbound 0건', async () => {
     const { calls, fetchImpl } = githubSpy()
     await expect(
       publishSitePost({
-        ...BASE_PARAMS, gateId: 'gate-1', lang: '../../etc',
+        ...BASE_PARAMS, workItemId: 'wi-1',
         siteGit: siteGitConfig(fetchImpl),
         gateCheckFetchImpl: gateCheckSpy('approved'),
       }),
-    ).rejects.toThrow(SlugOrLangInvalidError)
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
     expect(calls).toHaveLength(0)
   })
 
-  test('대문자·공백·언더스코어 등 규격 밖 slug도 거부된다', async () => {
-    const { fetchImpl } = githubSpy()
-    for (const badSlug of ['Hello-World', 'hello_world', 'hello world', '-leading-dash', 'trailing-dash-', '']) {
-      await expect(
-        publishSitePost({
-          ...BASE_PARAMS, gateId: 'gate-1', slug: badSlug,
-          siteGit: siteGitConfig(fetchImpl),
-          gateCheckFetchImpl: gateCheckSpy('approved'),
-        }),
-      ).rejects.toThrow(SlugOrLangInvalidError)
-    }
+  test('경로 조작 slug를 줘도(과거 방어 대상) 동결이 먼저 걸린다 — GitHub·게이트 조회 outbound 0건', async () => {
+    const { calls, fetchImpl } = githubSpy()
+    await expect(
+      publishSitePost({
+        ...BASE_PARAMS, gateId: 'gate-1', slug: '../../.github/workflows/x',
+        siteGit: siteGitConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
   })
 
-  test('정상 slug(hello-world)·lang(ko, en-US)은 통과한다(양성대조 — 과잉차단 아님)', async () => {
-    for (const lang of ['ko', 'en', 'en-US']) {
-      const { fetchImpl } = githubSpy()
-      const result = await publishSitePost({
-        ...BASE_PARAMS, gateId: 'gate-1', lang,
+  test('gate_id도 work_item도 없어도 동결 에러가 먼저다("requires either..." 에러보다 우선)', async () => {
+    const { calls, fetchImpl } = githubSpy()
+    await expect(
+      publishSitePost({
+        ...BASE_PARAMS,
+        siteGit: siteGitConfig(fetchImpl),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('에러 메시지에 도구명(publish_site_post)이 실린다', async () => {
+    const { fetchImpl } = githubSpy()
+    try {
+      await publishSitePost({
+        ...BASE_PARAMS, gateId: 'gate-1',
         siteGit: siteGitConfig(fetchImpl),
         gateCheckFetchImpl: gateCheckSpy('approved'),
       })
-      expect(result.commitSha).toBe('commit-sha-42')
+      throw new Error('unreachable — publishSitePost must be frozen')
+    } catch (err) {
+      expect((err as Error).message).toContain('publish_site_post')
     }
   })
 })

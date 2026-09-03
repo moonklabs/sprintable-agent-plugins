@@ -4,10 +4,15 @@
  * (①함수 진입 직후=media 컨테이너 생성보다도 먼저, ②media_publish 직전=레이스 방어)가
  * 각각 pin 대상 — story 6f2034cf가 이미 확立한 "모든 커넥터 공통 계약"을 이 커넥터는
  * 처음부터 그대로 따른다(스티비의 옛 결함을 재현하지 않음).
+ *
+ * [[Phase0·마케팅운영] 기존 발행 도구는 남아 있지만 모든 외부 요청 전에 플랫폼 이관
+ * 오류로 멈춘다](entity:story:0da62f78-b244-4c7e-bac1-4b72547894f0) 동결로 도달 불가·
+ * Phase 1 서버 어댑터 이관 시 계약 pin으로 참고·해제 시 skip 제거 (PO 리뷰, PR#39).
  */
 import { describe, test, expect } from 'bun:test'
 import { publishInstagramPost } from './instagram'
 import { GateNotApprovedError, NoGateFoundError } from './gate-check'
+import { ExternalPublishMovedToPlatformError } from './publish-freeze'
 
 /** Instagram 쪽 fetch 스파이 — 실제로 나간 (method, url) 쌍을 전부 기록한다. */
 function instagramSpy() {
@@ -51,7 +56,7 @@ function gateCheckListSpy(status: string | null) {
   ) as unknown as typeof fetch
 }
 
-describe('publishInstagramPost — chokepoint end-to-end (story a98dfbea)', () => {
+describe.skip('publishInstagramPost — chokepoint end-to-end (story a98dfbea) [SKIP: frozen by #3366, unreachable]', () => {
   test('gate.status=approved — 게시가 실제로 나간다(양성대조)', async () => {
     const { calls, fetchImpl } = instagramSpy()
     const result = await publishInstagramPost({
@@ -201,7 +206,7 @@ describe('publishInstagramPost — chokepoint end-to-end (story a98dfbea)', () =
   })
 })
 
-describe('publishInstagramPost — work_item 경로(#3312 AC5 동형, gate_id 없이 조회)', () => {
+describe.skip('publishInstagramPost — work_item 경로(#3312 AC5 동형, gate_id 없이 조회) [SKIP: frozen by #3366, unreachable]', () => {
   test('gateId 없이 workItemId만 줘도 approved면 게시가 나간다', async () => {
     const { calls, fetchImpl } = instagramSpy()
     const result = await publishInstagramPost({
@@ -291,5 +296,67 @@ describe('publishInstagramPost — work_item 경로(#3312 AC5 동형, gate_id �
     ).rejects.toThrow(GateNotApprovedError)
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/media?'))).toBe(true)
     expect(calls.some((c) => c.url.includes('/media_publish'))).toBe(false)
+  })
+})
+
+describe('publishInstagramPost — frozen (story #3366 Phase0 external-publish freeze)', () => {
+  test('⭐AC1/AC2 — 승인된 gate여도 즉시 EXTERNAL_PUBLISH_MOVED_TO_PLATFORM, Instagram·게이트 조회 outbound 0건', async () => {
+    const { calls, fetchImpl } = instagramSpy()
+    let gateCheckCalled = false
+    const gateCheckFetchImpl = (async () => {
+      gateCheckCalled = true
+      return new Response(JSON.stringify({ status: 'approved' }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      publishInstagramPost({
+        gateId: 'gate-1', imageUrl: 'https://example.com/pic.jpg', caption: 'hello',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        instagram: instagramConfig(fetchImpl),
+        gateCheckFetchImpl,
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+    expect(gateCheckCalled).toBe(false)
+  })
+
+  test('⭐AC3 — work_item 경로(#3312 AC5 동형)로 줘도 동결은 그대로, outbound 0건', async () => {
+    const { calls, fetchImpl } = instagramSpy()
+    await expect(
+      publishInstagramPost({
+        workItemId: 'wi-1', imageUrl: 'https://example.com/pic.jpg',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        instagram: instagramConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('gate_id도 work_item도 없어도 동결 에러가 먼저다("requires either..." 에러보다 우선)', async () => {
+    const { calls, fetchImpl } = instagramSpy()
+    await expect(
+      publishInstagramPost({
+        imageUrl: 'https://example.com/pic.jpg',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        instagram: instagramConfig(fetchImpl),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('에러 메시지에 도구명(publish_instagram_post)이 실린다', async () => {
+    const { fetchImpl } = instagramSpy()
+    try {
+      await publishInstagramPost({
+        gateId: 'gate-1', imageUrl: 'https://example.com/pic.jpg',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        instagram: instagramConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      })
+      throw new Error('unreachable — publishInstagramPost must be frozen')
+    } catch (err) {
+      expect((err as Error).message).toContain('publish_instagram_post')
+    }
   })
 })

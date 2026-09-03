@@ -4,6 +4,10 @@
  * 생성(POST .../threads)은 Meta 쪽 실제 쓰기 요청이라 draft 준비 취급이 아니다 — 두
  * chokepoint(①함수 진입 직후=한도조회보다도 먼저, ②publish 직전=레이스 방어)가 각각
  * pin 대상이다.
+ *
+ * [[Phase0·마케팅운영] 기존 발행 도구는 남아 있지만 모든 외부 요청 전에 플랫폼 이관
+ * 오류로 멈춘다](entity:story:0da62f78-b244-4c7e-bac1-4b72547894f0) 동결로 도달 불가·
+ * Phase 1 서버 어댑터 이관 시 계약 pin으로 참고·해제 시 skip 제거 (PO 리뷰, PR#39).
  */
 import { describe, test, expect } from 'bun:test'
 import {
@@ -15,6 +19,7 @@ import {
   ThreadsTextTooLongError,
 } from './threads'
 import { GateNotApprovedError, NoGateFoundError } from './gate-check'
+import { ExternalPublishMovedToPlatformError } from './publish-freeze'
 
 const OK_LIMIT = { data: [{ quota_usage: 10, config: { quota_total: 250 } }] }
 
@@ -62,7 +67,7 @@ function gateCheckListSpy(status: string | null) {
   ) as unknown as typeof fetch
 }
 
-describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
+describe.skip('publishThreadsPost — chokepoint end-to-end (#3311) [SKIP: frozen by #3366, unreachable]', () => {
   test('gate.status=approved — 게시가 실제로 나간다(양성대조)', async () => {
     const { calls, fetchImpl } = threadsSpy()
     const result = await publishThreadsPost({
@@ -241,7 +246,7 @@ describe('publishThreadsPost — chokepoint end-to-end (#3311)', () => {
   })
 })
 
-describe('publishThreadsPost — work_item 경로(#3312 AC5, gate_id 없이 조회)', () => {
+describe.skip('publishThreadsPost — work_item 경로(#3312 AC5, gate_id 없이 조회) [SKIP: frozen by #3366, unreachable]', () => {
   test('gateId 없이 workItemId만 줘도 approved면 게시가 나간다', async () => {
     const { calls, fetchImpl } = threadsSpy()
     const result = await publishThreadsPost({
@@ -334,6 +339,81 @@ describe('publishThreadsPost — work_item 경로(#3312 AC5, gate_id 없이 조�
     expect(calls.some((c) => c.url.includes('/threads_publishing_limit'))).toBe(true)
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads?'))).toBe(true)
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/threads_publish?'))).toBe(false)
+  })
+})
+
+describe('publishThreadsPost — frozen (story #3366 Phase0 external-publish freeze)', () => {
+  test('⭐AC1/AC2 — 승인된 gate여도 즉시 EXTERNAL_PUBLISH_MOVED_TO_PLATFORM, Threads·게이트 조회 outbound 0건', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    let gateCheckCalled = false
+    const gateCheckFetchImpl = (async () => {
+      gateCheckCalled = true
+      return new Response(JSON.stringify({ status: 'approved' }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      publishThreadsPost({
+        gateId: 'gate-1', text: 'hello threads',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl,
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+    expect(gateCheckCalled).toBe(false)
+  })
+
+  test('⭐AC3 — work_item 경로(#3312 AC5)로 줘도 동결은 그대로, outbound 0건', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    await expect(
+      publishThreadsPost({
+        workItemId: 'wi-1', text: 'hello via work item',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('gate_id도 work_item도 없어도 동결 에러가 먼저다("requires either..." 에러보다 우선)', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    await expect(
+      publishThreadsPost({
+        text: 'no gate reference at all',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('501자 초과 text 같은 입력 검증보다도 동결이 먼저 걸린다', async () => {
+    const { calls, fetchImpl } = threadsSpy()
+    await expect(
+      publishThreadsPost({
+        gateId: 'gate-1', text: 'a'.repeat(501),
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('에러 메시지에 도구명(publish_threads_post)이 실린다', async () => {
+    const { fetchImpl } = threadsSpy()
+    try {
+      await publishThreadsPost({
+        gateId: 'gate-1', text: 'hello',
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        threads: threadsConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      })
+      throw new Error('unreachable — publishThreadsPost must be frozen')
+    } catch (err) {
+      expect((err as Error).message).toContain('publish_threads_post')
+    }
   })
 })
 

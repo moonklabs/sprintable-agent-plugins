@@ -13,6 +13,7 @@
  * chokepoint를 강제한다(dry-run 여부는 호출부/환경 문제, 이 모듈이 판단하지 않는다).
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
+import { assertExternalPublishNotFrozen } from './publish-freeze'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -169,6 +170,11 @@ async function assertPublishGateApproved(params: PublishStibeeCampaignParams): P
 export async function publishStibeeCampaign(
   params: PublishStibeeCampaignParams,
 ): Promise<PublishStibeeCampaignResult> {
+  // ⭐story #3366 — 함수의 가장 첫 줄. gateId/workItemId 존재 검사보다도, draft 준비
+  // (create/content/update)보다도 먼저(뮤테이션 표적: 이 줄을 아래로 옮기면 fetch spy가
+  // 0을 벗어나야 정상 — stibee.test.ts가 그 갈림을 pin한다).
+  assertExternalPublishNotFrozen('publish_stibee_campaign')
+
   if (!params.gateId && !params.workItemId) {
     throw new Error('publishStibeeCampaign requires either gateId or workItemId to check the external_publish gate')
   }

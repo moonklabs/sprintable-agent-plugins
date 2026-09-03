@@ -19,6 +19,7 @@
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
 import { recordEvidence } from './evidence'
+import { assertExternalPublishNotFrozen } from './publish-freeze'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -195,6 +196,11 @@ async function assertPublishGateApproved(params: PublishThreadsPostParams): Prom
 export async function publishThreadsPost(
   params: PublishThreadsPostParams,
 ): Promise<PublishThreadsPostResult> {
+  // ⭐story #3366 — 함수의 가장 첫 줄. credential 조회도, 게이트 조회도, text 길이 검증도
+  // 이 줄보다 먼저면 안 된다(뮤테이션 표적: 이 줄을 아래로 옮기면 fetch spy가 0을 벗어나야
+  // 정상 — threads.test.ts가 그 갈림을 pin한다).
+  assertExternalPublishNotFrozen('publish_threads_post')
+
   const textLength = [...params.text].length
   if (textLength > MAX_TEXT_LENGTH) throw new ThreadsTextTooLongError(textLength)
 

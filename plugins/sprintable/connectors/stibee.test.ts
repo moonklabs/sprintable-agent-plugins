@@ -4,10 +4,15 @@
  * pending/rejected면 create(POST /v2/emails)조차 나가지 않는다 — create/content/update가
  * "draft 준비=게이트 무관 항상 진행"이던 예전 가정은 스티비 계정에 실제로 남는 외부
  * 쓰기라 틀렸다(threads.ts §PR#29 PO AC 리뷰와 동형 배치로 통일, story 6f2034cf).
+ *
+ * [[Phase0·마케팅운영] 기존 발행 도구는 남아 있지만 모든 외부 요청 전에 플랫폼 이관
+ * 오류로 멈춘다](entity:story:0da62f78-b244-4c7e-bac1-4b72547894f0) 동결로 도달 불가·
+ * Phase 1 서버 어댑터 이관 시 계약 pin으로 참고·해제 시 skip 제거 (PO 리뷰, PR#39).
  */
 import { describe, test, expect } from 'bun:test'
 import { publishStibeeCampaign, type StibeeCampaignContent } from './stibee'
 import { GateNotApprovedError, NoGateFoundError } from './gate-check'
+import { ExternalPublishMovedToPlatformError } from './publish-freeze'
 
 const CONTENT: StibeeCampaignContent = {
   create: { listId: 1, senderEmail: 'a@b.com', senderName: 'Sprintable', subject: 'hi' },
@@ -49,7 +54,7 @@ function gateCheckListSpy(status: string | null) {
   ) as unknown as typeof fetch
 }
 
-describe('publishStibeeCampaign — chokepoint end-to-end (#3292)', () => {
+describe.skip('publishStibeeCampaign — chokepoint end-to-end (#3292) [SKIP: frozen by #3366, unreachable]', () => {
   test('gate.status=approved — send이 실제로 나간다(양성대조)', async () => {
     const { calls, fetchImpl } = stibeeSpy()
     const result = await publishStibeeCampaign({
@@ -182,7 +187,7 @@ describe('publishStibeeCampaign — chokepoint end-to-end (#3292)', () => {
   })
 })
 
-describe('publishStibeeCampaign — work_item 경로(#3312 AC5, gate_id 없이 조회)', () => {
+describe.skip('publishStibeeCampaign — work_item 경로(#3312 AC5, gate_id 없이 조회) [SKIP: frozen by #3366, unreachable]', () => {
   test('gateId 없이 workItemId만 줘도 approved면 send가 나간다', async () => {
     const { calls, fetchImpl } = stibeeSpy()
     const result = await publishStibeeCampaign({
@@ -272,5 +277,67 @@ describe('publishStibeeCampaign — work_item 경로(#3312 AC5, gate_id 없이 �
     })
 
     expect(result.emailId).toBe(42)
+  })
+})
+
+describe('publishStibeeCampaign — frozen (story #3366 Phase0 external-publish freeze)', () => {
+  test('⭐AC1/AC2 — 승인된 gate여도 즉시 EXTERNAL_PUBLISH_MOVED_TO_PLATFORM, 스티비·게이트 조회 outbound 0건(draft 준비도 시작 안 함)', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    let gateCheckCalled = false
+    const gateCheckFetchImpl = (async () => {
+      gateCheckCalled = true
+      return new Response(JSON.stringify({ status: 'approved' }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      publishStibeeCampaign({
+        gateId: 'gate-1', content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+        gateCheckFetchImpl,
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+    expect(gateCheckCalled).toBe(false)
+  })
+
+  test('⭐AC3 — work_item 경로(#3312 AC5)로 줘도 동결은 그대로, outbound 0건', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    await expect(
+      publishStibeeCampaign({
+        workItemId: 'wi-1', content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('gate_id도 work_item도 없어도 동결 에러가 먼저다("requires either..." 에러보다 우선)', async () => {
+    const { calls, fetchImpl } = stibeeSpy()
+    await expect(
+      publishStibeeCampaign({
+        content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+      }),
+    ).rejects.toThrow(ExternalPublishMovedToPlatformError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('에러 메시지에 도구명(publish_stibee_campaign)이 실린다', async () => {
+    const { fetchImpl } = stibeeSpy()
+    try {
+      await publishStibeeCampaign({
+        gateId: 'gate-1', content: CONTENT,
+        sprintableApiUrl: 'https://app.sprintable.ai', sprintableApiKey: 'k',
+        stibee: { accessToken: 'stibee-token', fetchImpl },
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      })
+      throw new Error('unreachable — publishStibeeCampaign must be frozen')
+    } catch (err) {
+      expect((err as Error).message).toContain('publish_stibee_campaign')
+    }
   })
 })
