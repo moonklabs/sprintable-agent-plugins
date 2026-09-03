@@ -6,7 +6,6 @@
  */
 import { describe, test, expect } from 'bun:test'
 import { TOOL_DEFINITIONS } from './tool-definitions'
-import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './connectors/site_git.schema'
@@ -18,16 +17,34 @@ function toolByName(name: string) {
   return tool
 }
 
-describe('publish_threads_post — content_package 드리프트 0 (기계적 파생)', () => {
-  test('THREADS_CONNECTOR_DESCRIPTOR의 content 필드(text)가 inputSchema.properties에 정확히 그 규격으로 존재한다', () => {
-    const tool = toolByName('publish_threads_post')
-    expect(tool.inputSchema.properties.text).toMatchObject({ type: 'string', maxLength: 500 })
+describe('publish_threads_post — 제거 pin (story #3399, #3366 동결 위에서 실 삭제)', () => {
+  test('⭐AC1/AC6 — TOOL_DEFINITIONS에 더 이상 등록돼 있지 않다(회귀 시 이 pin이 RED)', () => {
+    const names = TOOL_DEFINITIONS.map((t) => t.name)
+    expect(names).not.toContain('publish_threads_post')
+  })
+})
+
+describe('create_channel_post_draft / submit_channel_post_draft / list_channel_connections — 신규 도구 계약(story #3399 AC2·3·9)', () => {
+  test('create_channel_post_draft는 work_item·connection_id·text가 필수, text에 하드코딩 maxLength가 없다(채널별 서버 판정)', () => {
+    const tool = toolByName('create_channel_post_draft')
+    expect(tool.inputSchema.required).toEqual(['work_item', 'connection_id', 'text'])
+    expect(tool.inputSchema.properties.text).toEqual({ type: 'string' })
   })
 
-  test('content 필드는 전부 inputSchema.required에도 들어있다(threads의 유일한 content 필드=text, required:true)', () => {
-    const tool = toolByName('publish_threads_post')
-    for (const name of contentFieldNames(THREADS_CONNECTOR_DESCRIPTOR)) {
-      expect(tool.inputSchema.required).toContain(name)
+  test('submit_channel_post_draft는 draft_id만 필수, version_id는 선택', () => {
+    const tool = toolByName('submit_channel_post_draft')
+    expect(tool.inputSchema.required).toEqual(['draft_id'])
+    expect(tool.inputSchema.properties.version_id).toBeDefined()
+  })
+
+  test('list_channel_connections는 파라미터가 없다(항상 호출 조직 전체 목록)', () => {
+    const tool = toolByName('list_channel_connections')
+    expect(Object.keys(tool.inputSchema.properties)).toHaveLength(0)
+  })
+
+  test('셋 다 publish_ 접두가 아니다(server.ts의 공통 동결 guard 대상이 아님 — 발행 도구가 아니라는 방향성 확認)', () => {
+    for (const name of ['create_channel_post_draft', 'submit_channel_post_draft', 'list_channel_connections']) {
+      expect(name.startsWith('publish_')).toBe(false)
     }
   })
 })
@@ -108,18 +125,18 @@ describe('publish_site_post — content_package 드리프트 0 (기계적 파생
   })
 })
 
-describe('발행 도구 동결 고지 — story #3366', () => {
-  test('publish_threads_post·publish_stibee_campaign·publish_instagram_post·publish_site_post 넷 다 설명에 동결 고지가 있다', () => {
-    for (const name of ['publish_threads_post', 'publish_stibee_campaign', 'publish_instagram_post', 'publish_site_post']) {
+describe('발행 도구 동결 고지 — story #3366 (publish_threads_post는 #3399에서 삭제, 나머지 셋만 남는다)', () => {
+  test('publish_stibee_campaign·publish_instagram_post·publish_site_post 셋 다 설명에 동결 고지가 있다', () => {
+    for (const name of ['publish_stibee_campaign', 'publish_instagram_post', 'publish_site_post']) {
       const tool = toolByName(name)
       expect(tool.description).toContain('EXTERNAL_PUBLISH_MOVED_TO_PLATFORM')
       expect(tool.description).toContain('FROZEN')
     }
   })
 
-  test('도구 이름은 지워지지 않는다(AC1 — 발견은 계속 가능) — TOOL_DEFINITIONS에 넷 다 여전히 등록돼 있다', () => {
+  test('도구 이름은 지워지지 않는다(AC1 — 발견은 계속 가능) — TOOL_DEFINITIONS에 셋 다 여전히 등록돼 있다', () => {
     const names = TOOL_DEFINITIONS.map((t) => t.name)
-    for (const name of ['publish_threads_post', 'publish_stibee_campaign', 'publish_instagram_post', 'publish_site_post']) {
+    for (const name of ['publish_stibee_campaign', 'publish_instagram_post', 'publish_site_post']) {
       expect(names).toContain(name)
     }
   })

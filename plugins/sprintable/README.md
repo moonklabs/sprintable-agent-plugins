@@ -79,50 +79,34 @@ gated on a separate human approval. Credentials are local-`.env` (same file as
 server-side per-org secrets are an M2+ concern if/when other orgs BYOA their own Stibee
 account.
 
-## Marketing publish connector — Threads (#3311, M1)
+## Marketing publish connector — Threads (#3311, M1 → removed in story #3399)
 
-`connectors/threads.ts` — the second 발행 커넥터, replacing Stibee as the *first* publish
-channel (Stibee's send API is Pro-gated and dogfood has 0 subscribers today, so reach was
-0 — see story #3311 background; Stibee stays wired for whenever subscribers exist).
+`connectors/threads.ts` still holds the read/measure-only Threads API calls
+(`threadsGetPublishingLimit`, `threadsGetInsights`, `get_threads_insights` MCP tool) and the
+agent-visible env-driven credential shape they use (`THREADS_ACCESS_TOKEN`/`THREADS_USER_ID`,
+same `.env` as `SPRINTABLE_API_KEY`, set via `/sprintable:configure-threads`).
 
-**This connector is not Moonklabs-only.** It is public-plugin shaped: any organization that
-installs this plugin, sets its own `THREADS_ACCESS_TOKEN`/`THREADS_USER_ID` in its own
-agent's env, and calls `publish_threads_post` gets the same behavior with its own Threads
-account — there is no Moonklabs constant anywhere in `connectors/threads.ts`. Moonklabs is
-customer-zero, not a hardcoded default. Onboarding (Meta app → Threads tester account →
-access token, written to be followable by "the least capable agent") is doc
-`threads-publish-channel-onboarding` and mirrored above in `skills/configure-threads/`.
+**The direct-publish tool (`publish_threads_post`, 2-call Threads Graph API container→publish
+sequence, two `assertGateApproved` chokepoints) no longer exists.** History: story #3366
+(PR#39) froze it first (`EXTERNAL_PUBLISH_MOVED_TO_PLATFORM`, code kept for possible
+server-side adapter reuse); story #3399 (2026-09-04) then deleted the tool code on top of that
+freeze once it was confirmed unreachable. The replacement path is channel-generic, not
+Threads-specific — see `connectors/channel-posts.ts` and the three MCP tools below (works for
+Threads today, any channel with an active connection tomorrow):
 
-```
-/sprintable:configure-threads <access-token> <user-id> [app-secret]   # writes to the same .env
-```
+- **`list_channel_connections`** — `GET .../channel-connections/agent-visible` (#3758):
+  minimal-field connection list (`id`/`channel`/`account_label`/`status`, no tokens) so an
+  agent can discover `connection_id` without the human-only full connection endpoint.
+- **`create_channel_post_draft`** — `POST .../channel-posts/drafts` (#3374): create or add a
+  new version to a draft. Never publishes.
+- **`submit_channel_post_draft`** — `POST .../channel-posts/drafts/{id}/submit` (#3374): sends
+  the draft version to the `external_publish` gate for approval.
 
-The `publish_threads_post` MCP tool runs a 2-call Threads Graph API sequence — `POST
-/v1.0/{THREADS_USER_ID}/threads` (create container, `media_type=TEXT`) → `POST
-/v1.0/{THREADS_USER_ID}/threads_publish` (`creation_id`) → published post id. **Two
-chokepoints** (PR#29 PO AC review — container creation is a real write to Meta, so it
-cannot go out unapproved; Stibee later adopted the same two-chokepoint shape, see below):
-`connectors/gate-check.ts::assertGateApproved()` runs (1) immediately on entry, before the
-rate-limit lookup or container creation — zero outbound calls to Meta while the gate isn't
-`approved`/`auto_passed` — and (2) again immediately before `threads_publish`, re-checking
-in case approval was revoked between (1) and (2). No new gate logic — same function Stibee
-uses, called twice. Pinned with two independent mutation tests
-(`connectors/threads.test.ts`, verified locally by deleting each `assertGateApproved` call
-in turn and confirming only its own tests go red, then restoring): removing chokepoint ①
-turns the "zero outbound while pending/rejected" tests red; removing chokepoint ② turns the
-race-defense test red without touching the others.
-
-Also checked before posting: text length (500-char cap, explicit error over the limit) and
-the 250-post/24h Threads publishing limit (`GET .../threads_publishing_limit`, explicit
-error if exhausted — no silent drop, no automatic retry). `threadsGetInsights()` (views/
-likes/replies/reposts/quotes) is implemented and tested for the M3 measure step but not
-called from the publish path yet.
-
-M1 scope: dev is a mock-server dry run (`bun test`) plus explicit errors when
-`THREADS_ACCESS_TOKEN`/`THREADS_USER_ID` are unset — no silent no-op. Real-account posting
-(a company-owned Threads account in Meta's developer mode as a registered tester) is a
-separate, explicitly confirmed step once credentials exist; real sends beyond that are M3,
-gated on human approval same as Stibee.
+Publishing itself (`POST .../channel-posts/drafts/{id}/publish`) stays server-side and
+human-only (`CHANNEL_POST_PUBLISH_HUMAN_ONLY`, story f8f7cb0f) — it is not exposed by this
+plugin at all, on top of the server's own enforcement (defense-in-depth, same principle as the
+old two-chokepoint design, just moved one layer up: the plugin no longer has a code path that
+*could* publish).
 
 ## Marketing publish connector — Instagram (story a98dfbea, M4, wiring only)
 
@@ -251,10 +235,12 @@ future channel — follows the same two-chokepoint shape, not a per-connector ju
 
 ### Gate resolution without a gate_id (#3312 AC5)
 
-Both `publish_stibee_campaign` and `publish_threads_post` accept `gate_id` explicitly, or
-`work_item` (+ optional `work_item_type`, default `story`) instead — for the recipe
-automation loop, which doesn't know a gate id up front, only the work item its approve
-stage just gated. `connectors/gate-check.ts::assertGateApprovedForWorkItem()` resolves it:
+`publish_stibee_campaign` (and, before its removal in story #3399, `publish_threads_post`)
+accepts `gate_id` explicitly, or `work_item` (+ optional `work_item_type`, default `story`)
+instead — for the recipe automation loop, which doesn't know a gate id up front, only the
+work item its approve stage just gated. (Threads' replacement path, `create_channel_post_draft`
+/ `submit_channel_post_draft`, doesn't need this — the server itself resolves and creates the
+gate on submit, #3374.) `connectors/gate-check.ts::assertGateApprovedForWorkItem()` resolves it:
 `GET /api/v2/gates?work_item_id=&work_item_type=&gate_type=external_publish&limit=1`
 (no new route — existing endpoint, contract confirmed against backend PR#3704 "커넥터용
 조회 계약" and the actual `list_gates` source; `limit=1` is required to get
@@ -348,8 +334,7 @@ recordEvidence()`, `POST /api/v2/evidence` — request shape pulled straight fro
 `backend/app/routers/evidence.py::EvidenceCreateRequest`, not guessed; that Pydantic model
 has no `extra="forbid"`, so a misspelled field is dropped silently rather than rejected —
 `evidence.test.ts` pins the exact field names sent) — in one call, not two, so "measured but
-forgot to record" can't happen structurally (same reason `publish_threads_post` bundles the
-gate check with the publish).
+forgot to record" can't happen structurally.
 
 This tool makes no success/failure judgment: metric *names* (views/likes/replies/reposts/
 quotes) are a Threads platform fact and are hardcoded; metric *targets* are not this tool's
