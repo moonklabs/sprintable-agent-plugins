@@ -7,19 +7,17 @@
  * 직접 pin할 수 있다(사본 비교가 아니라 실제 이 배열을 대조 — server.ts도 동일 배열을
  * 그대로 쓴다).
  *
- * publish_threads_post의 `text` 프로퍼티는 THREADS_CONNECTOR_DESCRIPTOR(connectors/
- * threads.schema.ts)에서 `contentPropertiesToJsonSchema()`로 기계적으로 파생된다 — 손으로
- * 따로 안 쓴다(드리프트 원천 차단). publish_stibee_campaign의 `create.*`/`html`은 중첩
- * 객체라 이 파생 대상이 아니고 손으로 유지하되, tool-definitions.test.ts가
- * STIBEE_CONNECTOR_DESCRIPTOR의 content 필드가 실제로 여기 존재하는지 대조한다.
+ * publish_stibee_campaign의 `create.*`/`html`은 중첩 객체라 이 파생 대상이 아니고 손으로
+ * 유지하되, tool-definitions.test.ts가 STIBEE_CONNECTOR_DESCRIPTOR의 content 필드가
+ * 실제로 여기 존재하는지 대조한다. (story #3399 — publish_threads_post 삭제로
+ * THREADS_CONNECTOR_DESCRIPTOR 파생은 이제 없다. 대체 도구 create_channel_post_draft는
+ * 채널 무관 범용 text 필드라 기계적 파생 대상이 아니다.)
  */
-import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './connectors/site_git.schema'
 import { contentPropertiesToJsonSchema } from './connectors/connector-schema'
 
-const threadsContentSchema = contentPropertiesToJsonSchema(THREADS_CONNECTOR_DESCRIPTOR)
 // story a98dfbea — instagram도 threads처럼 flat content 필드(imageUrl·caption, dot-path
 // 없음)라 같은 기계적 파생 경로를 그대로 탄다(stibee만 중첩이라 예외).
 const instagramContentSchema = contentPropertiesToJsonSchema(INSTAGRAM_CONNECTOR_DESCRIPTOR)
@@ -170,52 +168,84 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
-    // story #3311([M1·마케팅자동화] Threads 발행 커넥터) — doc
-    // threads-publish-channel-onboarding, story #3292(스티비)와 동형 chokepoint.
-    // gate_id는 external_publish 게이트가 이 발행 task에 이미 묶여 있어야 함 — 이
-    // 도구를 호출하는 것 자체는 승인의 증거가 아니다: 내부에서 GET
-    // /api/v2/gates/{gate_id}로 gate.status를 재확인하고, approved/auto_passed가
-    // 아니면 실제 게시(POST .../threads_publish)를 절대 호출하지 않는다
-    // (defense-in-depth). ⚠️THREADS_ACCESS_TOKEN/THREADS_USER_ID 미설정이면 즉시 에러
-    // (/sprintable:configure-threads 안내). ⚠️조직 상수 0 — 어느 조직이든 자기
-    // 토큰·계정으로 그대로 돈다(story #3311 «제품 경계»).
-    // story #3312 AC5: gate_id가 없으면 work_item(+work_item_type)으로 「이 work item의
-    // 최신 external_publish 게이트」를 조회해 동일 판정을 한다(stibee와 동형 경로).
-    // work_item은 gate_id가 있을 때도 항상 필수 — evidence/logging에 쓰는 원래 목적은
-    // 그대로 유지.
-    // story #3317: `text`는 THREADS_CONNECTOR_DESCRIPTOR(connectors/threads.schema.ts)에서
-    // 기계적으로 파생 — 아래 스프레드가 정본, 손으로 따로 안 쓴다.
-    name: 'publish_threads_post',
+    // story #3399(2026-09-04, 페드루 PO 확定) — 여기 있던 `publish_threads_post`(에이전트
+    // 직접 발행)는 삭제했다. 먼저 story #3366(PR#39)이 동결했고(코드 유지, 실행만 차단),
+    // 이 스토리가 그 동결 위에서 실제 삭제까지 마무리했다(PR 본문에 #3366 링크) — 동결을
+    // 되돌리는 게 아니라 그 위에서 완결하는 것. 대체 경로는 아래 create_channel_post_draft·
+    // submit_channel_post_draft(서버 #3374 초안·상신 API) — 발행 자체는 서버가
+    // human-only(f8f7cb0f)라 플러그인엔 절대 없다.
+    //
+    // story #3399 AC2 — 채널 포스트 초안 생성/수정. connectors/channel-posts.ts::
+    // createOrUpdateChannelPostDraft가 POST /organizations/{org}/channel-posts/drafts(#3374)를
+    // 부른다. 같은 (work_item, connection_id)로 다시 호출하면 새 버전이 생긴다(수정) —
+    // draft_id를 몰라도 되는 이유. channel은 요청에 없다 — connection_id에서 서버가
+    // derive한다(클라이언트가 실제와 다른 channel을 주장할 표면 자체가 없음, #3374 PO
+    // 정정). text 길이 제한은 채널마다 다르므로(서버가 CHANNEL_TEXT_TOO_LONG으로 max_length/
+    // current_length를 실어 알려준다) 이 스키마는 maxLength를 하드코딩하지 않는다.
+    name: 'create_channel_post_draft',
     description:
-      '⚠️FROZEN (story #3366): calling this immediately throws EXTERNAL_PUBLISH_MOVED_TO_PLATFORM ' +
-      'before any credential/gate lookup or HTTP request — submit the draft and publish from the ' +
-      'Sprintable screen instead. Kept only for discoverability; not executable. ' +
-      'Publish a text post to Threads (create container → publish), gated on an approved ' +
-      'external_publish Gate. Pass gate_id explicitly, or omit it to resolve the latest ' +
-      'external_publish gate for work_item instead. The publish call is blocked unless the ' +
-      'resolved gate reports status approved or auto_passed — calling this tool does not ' +
-      'itself authorize the publish. Text is capped at 500 characters and the 250-post/24h ' +
-      'Threads limit is checked before posting.',
+      'Create or update a channel post draft (works for any channel with an active connection — ' +
+      'call list_channel_connections first to find connection_id). Calling this again with the same ' +
+      'work_item and connection_id adds a new version to the same draft; it never publishes. Returns ' +
+      'draft_id/version_id/version/tagged_link_preview. Submit the version with ' +
+      'submit_channel_post_draft to send it to the external_publish gate — only a human can approve ' +
+      'and publish it from the Sprintable screen after that (story #3399, server API #3374).',
     inputSchema: {
       type: 'object',
       properties: {
-        gate_id: {
+        work_item: { type: 'string', description: 'Story/task id this draft belongs to.' },
+        connection_id: {
           type: 'string',
-          description: 'The external_publish Gate id this publish task is linked to. ' +
-            'Omit to resolve via work_item instead.',
+          description: 'Target channel connection id — call list_channel_connections first to discover it.',
         },
-        ...threadsContentSchema.properties,
-        work_item: {
+        text: { type: 'string' },
+        link_url: {
           type: 'string',
-          description: 'Story/task id this publish belongs to — always required (evidence/' +
-            'logging); also the gate-resolution key when gate_id is omitted.',
-        },
-        work_item_type: {
-          type: 'string',
-          description: 'Type of work_item for gate resolution — defaults to "story".',
+          description: 'Optional link to append — when set, the response includes a tagged_link_preview.',
         },
       },
-      required: [...threadsContentSchema.required, 'work_item'],
+      required: ['work_item', 'connection_id', 'text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #3399 AC3 — 초안 버전을 external_publish 게이트에 상신. connectors/
+    // channel-posts.ts::submitChannelPostDraft가 POST .../channel-posts/drafts/{id}/submit
+    // (#3374)를 부른다. 서버 실측(2026-09-03): 에이전트 키도 이 호출 가능(승인·발행만
+    // human-only, 상신 자체는 actor_type 가드 없음).
+    name: 'submit_channel_post_draft',
+    description:
+      'Submit a channel post draft version to the external_publish gate for approval. Defaults to ' +
+      'the latest version if version_id is omitted. This does not publish — only a human can approve ' +
+      'and publish it from the Sprintable screen (story #3399, server API #3374).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string' },
+        version_id: {
+          type: 'string',
+          description: 'Optional — defaults to the latest version of the draft.',
+        },
+      },
+      required: ['draft_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #3399 AC8/AC9 — connectors/channel-posts.ts::listAgentVisibleChannelConnections가
+    // GET .../channel-connections/agent-visible(#3758, 신규 서버 엔드포인트)를 부른다. 기존
+    // GET .../channel-connections(전체 필드)는 human-only라 에이전트가 connection_id를 알
+    // 방법이 그동안 전혀 없었다 — 이 도구가 그 갭을 닫는다. 응답은 최소 필드(id·channel·
+    // account_label·status)뿐 — 토큰·token_expires_at 등은 절대 안 실린다(#3758 field-
+    // minimization pin).
+    name: 'list_channel_connections',
+    description:
+      'List this organization\'s channel connections with minimal fields (id, channel, account_label, ' +
+      'status). Use the returned id as connection_id for create_channel_post_draft. Token and other ' +
+      'sensitive fields are never included (story #3399).',
+    inputSchema: {
+      type: 'object',
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -365,7 +395,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         post_id: {
           type: 'string',
-          description: 'Threads post (media) id — the id publish_threads_post returned.',
+          description: 'Threads post (media) id — the platform publishes it from an approved draft (story #3399); get the id from the Sprintable screen or the publication record.',
         },
         work_item: {
           type: 'string',

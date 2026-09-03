@@ -28,11 +28,20 @@ import {
   type CreateEmailRequest,
   type UpdateEmailRequest,
 } from './connectors/stibee'
-import { publishThreadsPost, getThreadsInsightsAndRecordEvidence } from './connectors/threads'
+import { getThreadsInsightsAndRecordEvidence } from './connectors/threads'
 import { publishInstagramPost } from './connectors/instagram'
 import { publishSitePost } from './connectors/site_git'
 import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
 import { assertExternalPublishNotFrozen } from './connectors/publish-freeze'
+import {
+  createOrUpdateChannelPostDraft,
+  submitChannelPostDraft,
+  listAgentVisibleChannelConnections,
+  ChannelPostConnectionNotActiveError,
+  ChannelPostTextTooLongError,
+  ChannelPostApproverRoleMissingError,
+  ChannelPostDraftNotFoundError,
+} from './connectors/channel-posts'
 import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
@@ -330,42 +339,57 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           throw err
         }
       }
-      case 'publish_threads_post': {
-        const threadsToken = (process.env.THREADS_ACCESS_TOKEN ?? '').trim()
-        const threadsUserId = (process.env.THREADS_USER_ID ?? '').trim()
-        if (!threadsToken || !threadsUserId) {
-          throw new Error(
-            'THREADS_ACCESS_TOKEN/THREADS_USER_ID not configured — run ' +
-              '/sprintable:configure-threads <access-token> <user-id> [app-secret] first',
-          )
-        }
-        // story #3312 AC5: gate_id 선택, 없으면 work_item으로 조회(work_item 자체는 로깅
-        // 목적으로 항상 필수 — 스키마 required, gateId 명시 여부와 무관).
-        const gateId = args.gate_id ? String(args.gate_id) : undefined
-        const text = String(args.text ?? '')
+      case 'create_channel_post_draft': {
         const workItem = String(args.work_item ?? '')
         if (!workItem) throw new Error('work_item is required')
-        const workItemType = args.work_item_type ? String(args.work_item_type) : undefined
+        const connectionId = String(args.connection_id ?? '')
+        if (!connectionId) throw new Error('connection_id is required')
+        const text = String(args.text ?? '')
+        const linkUrl = args.link_url ? String(args.link_url) : undefined
         try {
-          const result = await publishThreadsPost({
-            gateId,
-            workItemId: workItem,
-            workItemType,
-            text,
-            sprintableApiUrl: API_URL,
-            sprintableApiKey: API_KEY,
-            threads: { accessToken: threadsToken, userId: threadsUserId },
+          const result = await createOrUpdateChannelPostDraft(
+            { workItemId: workItem, connectionId, text, linkUrl },
+            { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('channel_post_draft_saved', {
+            work_item: workItem, connection_id: connectionId, draft_id: result.draftId, version: result.version,
           })
-          logEvent('threads_publish_sent', { gate_id: gateId, work_item: workItem, post_id: result.postId })
           return { content: [{ type: 'text', text: JSON.stringify(result) }] }
         } catch (err) {
-          if (err instanceof GateNotApprovedError) {
-            logEvent('threads_publish_blocked', { gate_id: gateId, work_item: workItem, gate_status: err.gateStatus })
-          } else if (err instanceof NoGateFoundError) {
-            logEvent('threads_publish_no_gate', { work_item: workItem })
+          if (err instanceof ChannelPostConnectionNotActiveError) {
+            logEvent('channel_post_draft_connection_not_active', { work_item: workItem, connection_id: connectionId })
+          } else if (err instanceof ChannelPostTextTooLongError) {
+            logEvent('channel_post_draft_text_too_long', {
+              work_item: workItem, max_length: err.maxLength, current_length: err.currentLength,
+            })
           }
           throw err
         }
+      }
+      case 'submit_channel_post_draft': {
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const versionId = args.version_id ? String(args.version_id) : undefined
+        try {
+          const result = await submitChannelPostDraft(
+            { draftId, versionId }, { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('channel_post_draft_submitted', { draft_id: draftId, gate_id: result.gateId, status: result.status })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ChannelPostDraftNotFoundError) {
+            logEvent('channel_post_draft_submit_not_found', { draft_id: draftId })
+          } else if (err instanceof ChannelPostConnectionNotActiveError) {
+            logEvent('channel_post_draft_submit_connection_not_active', { draft_id: draftId })
+          } else if (err instanceof ChannelPostApproverRoleMissingError) {
+            logEvent('channel_post_draft_submit_approver_role_missing', { draft_id: draftId })
+          }
+          throw err
+        }
+      }
+      case 'list_channel_connections': {
+        const result = await listAgentVisibleChannelConnections({ apiUrl: API_URL, apiKey: API_KEY })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
       }
       case 'publish_instagram_post': {
         const igToken = (process.env.INSTAGRAM_ACCESS_TOKEN ?? '').trim()

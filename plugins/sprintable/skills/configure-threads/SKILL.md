@@ -34,9 +34,13 @@ Arguments passed: `$ARGUMENTS`
 The `.env` gains up to three keys:
 
 - `THREADS_ACCESS_TOKEN` — the (long-lived, 60-day) Threads access token, required by the
-  `publish_threads_post` MCP tool. Sent as the `access_token` query parameter on every
+  `get_threads_insights` MCP tool (measure step, story #3321) and the 250-post/24h
+  publishing-limit check it uses. Sent as the `access_token` query parameter on every
   Threads Graph API call — not a header, not OAuth at call time (already-exchanged token).
-- `THREADS_USER_ID` — the Threads user id the posts are published as (from
+  **Not used for publishing** — story #3399 removed the direct-publish tool; posting now
+  goes through the Sprintable server's own channel connection (OAuth, story #3373),
+  unrelated to this local token.
+- `THREADS_USER_ID` — the Threads user id whose insights are read (from
   `GET https://graph.threads.net/v1.0/me?fields=id,username&access_token=…`). Required.
 - `THREADS_APP_SECRET` — the app's Threads-specific secret, used only to refresh the
   long-lived token before it expires (`GET .../refresh_access_token`). Not read by the
@@ -57,10 +61,14 @@ Read `$DIR/.env` (`$SPRINTABLE_STATE_DIR` if set, else `~/.claude/channels/sprin
 2. **What next**:
    - Missing `THREADS_ACCESS_TOKEN` or `THREADS_USER_ID` → *"Run
      `/sprintable:configure-threads <access-token> <user-id> [app-secret]`."*
-   - Both set → *"Ready. The `publish_threads_post` tool will use them after a session
-     restart (or `/reload-plugins`)."*
-3. If `SPRINTABLE_API_KEY` itself is not set yet, say so too — `publish_threads_post`
-   also needs the Sprintable agent key (for the gate-status chokepoint check), so Threads
+   - Both set → *"Ready. `get_threads_insights` will use them after a session restart (or
+     `/reload-plugins`). To post to Threads: `list_channel_connections` (find
+     connection_id) → `create_channel_post_draft` (write/edit) → `submit_channel_post_draft`
+     (send to the external_publish gate) — then a human approves and publishes it from the
+     Sprintable screen (story #3399). None of those three tools need the Threads
+     credentials here — they call the Sprintable server directly."*
+3. If `SPRINTABLE_API_KEY` itself is not set yet, say so too — `get_threads_insights` and
+   all three channel-post tools above need the Sprintable agent key, so Threads
    credentials alone are not enough. Point at `/sprintable:configure` for that half.
 
 ### `<access-token> <user-id> [app-secret]` — save
@@ -72,8 +80,8 @@ isolation** section — it applies identically here (same file, same STATE_DIR).
 1. Split `$ARGUMENTS` on whitespace: first token = access token, second = user id, third
    (optional) = app secret. Trim whitespace on each.
 2. If fewer than 2 tokens given, STOP and ask for both `<access-token>` and `<user-id>` —
-   the tool cannot address a Threads account without a user id, and a lone token left
-   unset would silently break `publish_threads_post` with an unrelated-looking error.
+   `get_threads_insights` cannot address a Threads account without a user id, and a lone
+   token left unset would silently break it with an unrelated-looking error.
 3. `mkdir -p "$DIR"`
 4. **Overwrite guard.** Read the existing `$DIR/.env` if present. If it already has a
    `THREADS_ACCESS_TOKEN=` or `THREADS_USER_ID=` whose value differs from the new one,
