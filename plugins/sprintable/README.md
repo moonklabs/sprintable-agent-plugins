@@ -218,7 +218,7 @@ first, change it in one place, both sides read this section**:
   how the post got committed.
 
 ```
-GITHUB_TOKEN=<repo-scoped PAT with Contents write access>
+SITE_GIT_GITHUB_TOKEN=<repo-scoped PAT with Contents write access>
 ```
 (`repo`/`branch`/`path_template`/`site_base_url` are **not** secrets — they're `org_config`
 fields the calling agent passes directly into `publish_site_post`, same convention as

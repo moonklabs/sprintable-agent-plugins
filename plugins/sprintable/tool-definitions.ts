@@ -261,7 +261,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // instagram.ts와 동형 chokepoint(story 6f2034cf "공통 계약" — ①함수 진입 직후
     // ②커밋 PUT 직전 재확認). gate_id는 external_publish 게이트가 이 발행 task에 이미
     // 묶여 있어야 함 — 이 도구를 호출하는 것 자체는 승인의 증거가 아니다.
-    // ⚠️GITHUB_TOKEN 미설정이면 즉시 에러. repo/branch/path_template/site_base_url은
+    // ⚠️SITE_GIT_GITHUB_TOKEN 미설정이면 즉시 에러. repo/branch/path_template/site_base_url은
     // org_config 필드(SITE_GIT_CONNECTOR_DESCRIPTOR)지만 stibee.ts의 create.senderEmail·
     // create.listId 등과 동형 관례로 이 도구가 직접 받는다 — 서버가 등록 시점 org_config를
     // 자동 주입하지 않는다(publish_stibee_campaign이 이미 그 관례, 새 주입 경로 발명 0).

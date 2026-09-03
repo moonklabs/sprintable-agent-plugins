@@ -75,6 +75,6 @@
     }
   ],
   "requires_env": [
-    "GITHUB_TOKEN"
+    "SITE_GIT_GITHUB_TOKEN"
   ]
 }

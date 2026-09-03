@@ -5,7 +5,7 @@
  * 대상 — story 6f2034cf "공통 계약"을 이 커넥터도 처음부터 그대로 따른다.
  */
 import { describe, test, expect } from 'bun:test'
-import { publishSitePost, buildSitePostFile } from './site_git'
+import { publishSitePost, buildSitePostFile, SlugOrLangInvalidError } from './site_git'
 import { GateNotApprovedError, NoGateFoundError } from './gate-check'
 
 /** GitHub Contents API 쪽 fetch 스파이 — 실제로 나간 (method, url) 쌍을 전부 기록한다.
@@ -334,5 +334,63 @@ describe('buildSitePostFile — frontmatter 직렬화(계약 SSOT)', () => {
       'body',
     )
     expect(file).toContain('title: "제목 \\"인용\\" \\\\경로"')
+  })
+})
+
+describe('publishSitePost — slug/lang 경로 조작 방어(story a32c9f1a, PR#37 PO 리뷰)', () => {
+  test('⭐slug에 경로 조작 문자열(traversal) — GitHub 호출도 게이트 조회도 0건, chokepoint①보다 먼저 막힌다', async () => {
+    const { calls, fetchImpl } = githubSpy()
+    let gateCheckCalled = false
+    const gateCheckFetchImpl = (async () => {
+      gateCheckCalled = true
+      return new Response(JSON.stringify({ status: 'approved' }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      publishSitePost({
+        ...BASE_PARAMS, gateId: 'gate-1', slug: '../../.github/workflows/x',
+        siteGit: siteGitConfig(fetchImpl),
+        gateCheckFetchImpl,
+      }),
+    ).rejects.toThrow(SlugOrLangInvalidError)
+    expect(calls).toHaveLength(0)
+    expect(gateCheckCalled).toBe(false)
+  })
+
+  test('lang에 경로 조작 문자열(traversal) — 동일하게 0건', async () => {
+    const { calls, fetchImpl } = githubSpy()
+    await expect(
+      publishSitePost({
+        ...BASE_PARAMS, gateId: 'gate-1', lang: '../../etc',
+        siteGit: siteGitConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      }),
+    ).rejects.toThrow(SlugOrLangInvalidError)
+    expect(calls).toHaveLength(0)
+  })
+
+  test('대문자·공백·언더스코어 등 규격 밖 slug도 거부된다', async () => {
+    const { fetchImpl } = githubSpy()
+    for (const badSlug of ['Hello-World', 'hello_world', 'hello world', '-leading-dash', 'trailing-dash-', '']) {
+      await expect(
+        publishSitePost({
+          ...BASE_PARAMS, gateId: 'gate-1', slug: badSlug,
+          siteGit: siteGitConfig(fetchImpl),
+          gateCheckFetchImpl: gateCheckSpy('approved'),
+        }),
+      ).rejects.toThrow(SlugOrLangInvalidError)
+    }
+  })
+
+  test('정상 slug(hello-world)·lang(ko, en-US)은 통과한다(양성대조 — 과잉차단 아님)', async () => {
+    for (const lang of ['ko', 'en', 'en-US']) {
+      const { fetchImpl } = githubSpy()
+      const result = await publishSitePost({
+        ...BASE_PARAMS, gateId: 'gate-1', lang,
+        siteGit: siteGitConfig(fetchImpl),
+        gateCheckFetchImpl: gateCheckSpy('approved'),
+      })
+      expect(result.commitSha).toBe('commit-sha-42')
+    }
   })
 })

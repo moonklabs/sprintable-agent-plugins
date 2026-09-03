@@ -396,9 +396,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
       }
       case 'publish_site_post': {
-        const githubToken = (process.env.GITHUB_TOKEN ?? '').trim()
+        const githubToken = (process.env.SITE_GIT_GITHUB_TOKEN ?? '').trim()
         if (!githubToken) {
-          throw new Error('GITHUB_TOKEN not configured — set it in the plugin env first')
+          throw new Error('SITE_GIT_GITHUB_TOKEN not configured — set it in the plugin env first')
         }
         // story #3312 AC5 동형: gate_id 선택, 없으면 work_item으로 조회(work_item 자체는
         // 로깅 목적으로 항상 필수 — 스키마 required, gateId 명시 여부와 무관).

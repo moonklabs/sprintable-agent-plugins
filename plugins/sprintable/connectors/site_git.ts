@@ -45,6 +45,26 @@ function resolvePath(pathTemplate: string, params: { lang: string; slug: string 
   return pathTemplate.replace('{lang}', params.lang).replace('{slug}', params.slug)
 }
 
+// story a32c9f1a(PO 리뷰, PR#37) — 게이트 승인은 「글」을 본 것이지 path_template에
+// 치환될 slug/lang 문자열 자체를 본 게 아니다. resolvePath()는 순수 substring 치환이라
+// slug에 `../../.github/workflows/x` 같은 경로 조작 문자열이 들어오면 Contents 쓰기
+// 권한이 있는 PAT로 저장소 임의 경로(워크플로우 파일이면 CI 탈취)에 쓸 수 있다 —
+// chokepoint①보다도 먼저 막는다(입력 검증은 인가 판정과 무관한 별개 축).
+const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
+const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/
+
+export class SlugOrLangInvalidError extends Error {
+  constructor(public readonly field: 'slug' | 'lang', public readonly value: string) {
+    super(`publishSitePost: ${field}=${JSON.stringify(value)} does not match the required shape — refusing to resolve a file path from it`)
+    this.name = 'SlugOrLangInvalidError'
+  }
+}
+
+function assertSlugAndLangShape(slug: string, lang: string): void {
+  if (!SLUG_RE.test(slug)) throw new SlugOrLangInvalidError('slug', slug)
+  if (!LANG_RE.test(lang)) throw new SlugOrLangInvalidError('lang', lang)
+}
+
 function encodeContentsPath(path: string): string {
   // GitHub Contents API path는 세그먼트별로 인코딩(슬래시 자체는 보존).
   return path.split('/').map(encodeURIComponent).join('/')
@@ -200,6 +220,12 @@ export async function publishSitePost(
   if (!params.gateId && !params.workItemId) {
     throw new Error('publishSitePost requires either gateId or workItemId to check the external_publish gate')
   }
+
+  // ⭐경로 조작 방어(PR#37 PO 리뷰) — chokepoint①보다도 먼저, GitHub 호출은 물론
+  // 게이트 조회보다도 먼저 던진다(입력 형상 자체가 글러먹었으면 승인 여부를 물을
+  // 이유가 없다). 지우면(뮤테이션) traversal slug로도 sha GET이 나가야 정상 —
+  // site_git.test.ts가 그 갈림을 pin한다.
+  assertSlugAndLangShape(params.slug, params.lang)
 
   // ⭐chokepoint① — sha 조회를 포함한 어떤 GitHub 호출보다도 먼저. 지우거나 아래로
   // 옮기면(뮤테이션) pending/rejected 게이트로도 sha 조회가 나가야 정상 —

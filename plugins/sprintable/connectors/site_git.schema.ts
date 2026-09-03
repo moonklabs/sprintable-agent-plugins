@@ -58,8 +58,8 @@ export const SITE_GIT_CONNECTOR_DESCRIPTOR: ConnectorDescriptor = {
       setupHint: '공개 사이트 주소(예: https://sprintable.ai) — 조직 설정 화면에 등록',
     },
   ],
-  // GITHUB_TOKEN만 — repo/branch/path_template/site_base_url은 시크릿이 아니라
+  // SITE_GIT_GITHUB_TOKEN만 — repo/branch/path_template/site_base_url은 시크릿이 아니라
   // org_config 필드로 선언한다(connector-schema.ts의 시크릿-형 필드명 서버측 이중가드와
   // 무관, 그 값들 자체가 비밀이 아니므로).
-  requiresEnv: ['GITHUB_TOKEN'],
+  requiresEnv: ['SITE_GIT_GITHUB_TOKEN'],
 }
