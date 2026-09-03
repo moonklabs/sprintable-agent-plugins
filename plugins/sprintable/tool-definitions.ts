@@ -16,12 +16,16 @@
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
+import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './connectors/site_git.schema'
 import { contentPropertiesToJsonSchema } from './connectors/connector-schema'
 
 const threadsContentSchema = contentPropertiesToJsonSchema(THREADS_CONNECTOR_DESCRIPTOR)
 // story a98dfbea — instagram도 threads처럼 flat content 필드(imageUrl·caption, dot-path
 // 없음)라 같은 기계적 파생 경로를 그대로 탄다(stibee만 중첩이라 예외).
 const instagramContentSchema = contentPropertiesToJsonSchema(INSTAGRAM_CONNECTOR_DESCRIPTOR)
+// story a32c9f1a — site_git도 flat content 필드(title/body/slug/lang/summary/tags,
+// dot-path 없음)라 같은 기계적 파생 경로.
+const siteGitContentSchema = contentPropertiesToJsonSchema(SITE_GIT_CONNECTOR_DESCRIPTOR)
 
 export interface ToolDefinition {
   name: string
@@ -253,6 +257,60 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    // story a32c9f1a([마케팅자동화·발행 채널] 자사 사이트 git 커넥터) — threads.ts/
+    // instagram.ts와 동형 chokepoint(story 6f2034cf "공통 계약" — ①함수 진입 직후
+    // ②커밋 PUT 직전 재확認). gate_id는 external_publish 게이트가 이 발행 task에 이미
+    // 묶여 있어야 함 — 이 도구를 호출하는 것 자체는 승인의 증거가 아니다.
+    // ⚠️SITE_GIT_GITHUB_TOKEN 미설정이면 즉시 에러. repo/branch/path_template/site_base_url은
+    // org_config 필드(SITE_GIT_CONNECTOR_DESCRIPTOR)지만 stibee.ts의 create.senderEmail·
+    // create.listId 등과 동형 관례로 이 도구가 직접 받는다 — 서버가 등록 시점 org_config를
+    // 자동 주입하지 않는다(publish_stibee_campaign이 이미 그 관례, 새 주입 경로 발명 0).
+    // 값 자체는 시크릿이 아니므로(그래서 org_config로 선언했지 requiresEnv가 아니다)
+    // 호출부가 그대로 넘겨도 무해하다.
+    // story #3312 AC5 동형: gate_id가 없으면 work_item(+work_item_type)으로 최신
+    // external_publish 게이트를 조회한다. work_item은 gate_id가 있을 때도 항상 필수
+    // (evidence/logging).
+    // story #3317: title/body/slug/lang/summary/tags는 SITE_GIT_CONNECTOR_DESCRIPTOR
+    // (connectors/site_git.schema.ts)에서 기계적으로 파생 — 손으로 따로 안 쓴다.
+    name: 'publish_site_post',
+    description:
+      'Commit an approved blog post as a markdown file to the organization\'s configured ' +
+      'static-site git repo (GitHub Contents API), gated on an approved external_publish Gate. ' +
+      'Pass gate_id explicitly, or omit it to resolve the latest external_publish gate for ' +
+      'work_item instead. The commit is blocked unless the resolved gate reports status ' +
+      'approved or auto_passed — calling this tool does not itself authorize the publish. ' +
+      'Returns the commit sha and the expected published URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        gate_id: {
+          type: 'string',
+          description: 'The external_publish Gate id this publish task is linked to. ' +
+            'Omit to resolve via work_item instead.',
+        },
+        ...siteGitContentSchema.properties,
+        repo: { type: 'string', description: 'Target static-site GitHub repo, "owner/name" — from org_config.' },
+        branch: { type: 'string', description: 'Target branch to commit to — from org_config.' },
+        path_template: {
+          type: 'string',
+          description: 'File path template with {lang}/{slug} placeholders, e.g. "content/blog/{lang}/{slug}.md" — from org_config.',
+        },
+        site_base_url: { type: 'string', description: 'Public site base URL for computing the published post URL — from org_config.' },
+        work_item: {
+          type: 'string',
+          description: 'Story/task id this publish belongs to — always required (evidence/' +
+            'logging); also the gate-resolution key when gate_id is omitted.',
+        },
+        work_item_type: {
+          type: 'string',
+          description: 'Type of work_item for gate resolution — defaults to "story".',
+        },
+      },
+      required: [...siteGitContentSchema.required, 'repo', 'branch', 'path_template', 'site_base_url', 'work_item'],
+      additionalProperties: false,
+    },
+  },
+  {
     // story #3317 — 조회 전용(부작용 0). content_package 계약(connector-schema.ts
     // toWireDescriptor 형상)을 그대로 반환 — 백엔드가 조직 커넥터 레지스트리 등록에
     // 소비할 계약(AC2, 등록 엔드포인트 자체는 별도 스토리). apply-time 검사가 "필수
@@ -267,7 +325,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee', 'instagram'],
+          enum: ['threads', 'stibee', 'instagram', 'site_git'],
           description: 'Which connector to describe.',
         },
       },
@@ -329,7 +387,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee', 'instagram'],
+          enum: ['threads', 'stibee', 'instagram', 'site_git'],
           description: 'Which connector to register.',
         },
       },
@@ -355,7 +413,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee', 'instagram'],
+          enum: ['threads', 'stibee', 'instagram', 'site_git'],
           description: 'Which connector to configure.',
         },
         config: {
