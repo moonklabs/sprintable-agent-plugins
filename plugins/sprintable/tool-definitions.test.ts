@@ -108,6 +108,23 @@ describe('publish_site_post — content_package 드리프트 0 (기계적 파생
   })
 })
 
+describe('발행 도구 동결 고지 — story #3366', () => {
+  test('publish_threads_post·publish_stibee_campaign·publish_instagram_post·publish_site_post 넷 다 설명에 동결 고지가 있다', () => {
+    for (const name of ['publish_threads_post', 'publish_stibee_campaign', 'publish_instagram_post', 'publish_site_post']) {
+      const tool = toolByName(name)
+      expect(tool.description).toContain('EXTERNAL_PUBLISH_MOVED_TO_PLATFORM')
+      expect(tool.description).toContain('FROZEN')
+    }
+  })
+
+  test('도구 이름은 지워지지 않는다(AC1 — 발견은 계속 가능) — TOOL_DEFINITIONS에 넷 다 여전히 등록돼 있다', () => {
+    const names = TOOL_DEFINITIONS.map((t) => t.name)
+    for (const name of ['publish_threads_post', 'publish_stibee_campaign', 'publish_instagram_post', 'publish_site_post']) {
+      expect(names).toContain(name)
+    }
+  })
+})
+
 describe('describe_connector — 도구 정의 존재·계약', () => {
   test('describe_connector 도구가 등록돼 있고 connector enum이 threads/stibee/instagram/site_git 넷 다 포함한다', () => {
     const tool = toolByName('describe_connector')

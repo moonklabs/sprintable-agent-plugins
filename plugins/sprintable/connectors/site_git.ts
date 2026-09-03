@@ -21,6 +21,7 @@
  * 항상 큰따옴표로 감싸 콜론·특수문자 모호성을 원천 차단, 배열은 인라인 `[...]`).
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
+import { assertExternalPublishNotFrozen } from './publish-freeze'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -60,7 +61,11 @@ export class SlugOrLangInvalidError extends Error {
   }
 }
 
-function assertSlugAndLangShape(slug: string, lang: string): void {
+/** story #3366 — export한다: publishSitePost가 이제 항상 그 전에 얼어붙어(아래 chokepoint
+ * 이전 guard) 이 검증까지 도달하지 못하므로, site_git.test.ts가 이 순수 검증 로직 자체를
+ * (경로 조작 방어는 서버 어댑터 재사용 대상이라 여전히 가치 있다) publishSitePost를
+ * 거치지 않고 직접 단위 테스트할 수 있게 한다. */
+export function assertSlugAndLangShape(slug: string, lang: string): void {
   if (!SLUG_RE.test(slug)) throw new SlugOrLangInvalidError('slug', slug)
   if (!LANG_RE.test(lang)) throw new SlugOrLangInvalidError('lang', lang)
 }
@@ -217,6 +222,11 @@ async function assertPublishGateApproved(params: PublishSitePostParams): Promise
 export async function publishSitePost(
   params: PublishSitePostParams,
 ): Promise<PublishSitePostResult> {
+  // ⭐story #3366 — 함수의 가장 첫 줄. slug/lang 경로 조작 방어보다도, gateId/workItemId
+  // 존재 검사보다도 먼저(뮤테이션 표적: 이 줄을 아래로 옮기면 fetch spy가 0을 벗어나야
+  // 정상 — site_git.test.ts가 그 갈림을 pin한다).
+  assertExternalPublishNotFrozen('publish_site_post')
+
   if (!params.gateId && !params.workItemId) {
     throw new Error('publishSitePost requires either gateId or workItemId to check the external_publish gate')
   }
