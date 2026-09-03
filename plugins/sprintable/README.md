@@ -161,6 +161,71 @@ INSTAGRAM_USER_ID=<ig-business-account-id>
 (no `configure-instagram` skill yet — out of this story's wiring scope; env is set by hand
 for now, same shape as `configure-threads`/`configure-stibee` will eventually cover.)
 
+## Marketing publish connector — 자사 사이트(git 기반 정적 사이트) (story a32c9f1a)
+
+`connectors/site_git.ts` — the first channel that reaches the outside world **without any
+external social account**: approved posts get committed as markdown files directly to an
+org-configured git repo (via the GitHub Contents API), which the repo's own deploy pipeline
+then publishes. Grounded against the actual `sprintable-landing` repo (Next.js 16, App
+Router, `@cloudflare/next-on-pages` → Cloudflare Pages, push-to-`main` auto-deploy) rather
+than assumed.
+
+Same two-chokepoint shape as Threads/Stibee/Instagram (see "Common contract" below) — ①
+before any GitHub call (including the read-only sha lookup — outbound is outbound, matching
+Threads' rate-limit GET being gated too), ② right before the commit `PUT` (the actual
+irreversible write), both pinned by independent mutation tests (`connectors/site_git.test.ts`).
+
+### File path / frontmatter contract (PO 확定, 2026-09-03 — shared with `sprintable-landing`)
+
+This is the contract both this connector (the writer) and `sprintable-landing`'s
+`/ko/blog`/`/ko/blog/{slug}` pages (the reader, story 2b4067b5) key off of — **pin it here
+first, change it in one place, both sides read this section**:
+
+- **Path**: `org_config.path_template` with `{lang}`/`{slug}` placeholders resolved — default
+  convention `content/blog/{lang}/{slug}.md`. The org sets its own template; the connector
+  only does the substitution (`resolvePath()` in `site_git.ts`), it does not hardcode the
+  default.
+- **Frontmatter** (YAML, hand-serialized in `buildSitePostFile()` — no yaml dependency, the
+  field set is small and fixed, every value is double-quoted to sidestep colon/quote
+  ambiguity entirely):
+  - `title`, `slug`, `lang` — from the work item's content.
+  - `publishedAt` — ISO8601, **computed by the connector at commit time** (the moment the
+    approved gate clears this chokepoint), not supplied by the caller.
+  - `summary`, `tags` — optional content fields.
+  - `source_story` — optional, set automatically from `workItemId` when present (not a
+    separate parameter).
+- **Body**: plain markdown, written verbatim after the closing `---`.
+- **Published URL**: `{org_config.site_base_url}/{lang}/blog/{slug}` — matches the route
+  shape `sprintable-landing` actually builds (`app/ko/blog/[slug]/`, confirmed against that
+  repo directly — it has no existing `/ko`-prefix routing mechanism today, next-intl there is
+  cookie-based single-tree, so that repo's blog route is a standalone folder, not reusing
+  existing locale plumbing).
+
+### Scope boundaries (wiring-only, same discipline as Instagram's M4)
+
+- **`mode: 'pr'` is not wired** — only direct-commit-to-branch. A PR-creation mode needs a
+  generated branch name, a resolved base ref, and an opened PR — real added complexity this
+  story's scope doesn't call for. If a workflow later needs review-before-merge instead of
+  direct publish, that's a separate story.
+- **Idempotent overwrite, not append**: `siteGitCommitFile()` always does a GET-for-sha first
+  (`siteGitGetFileSha()`) — a new file omits `sha` in the PUT body (GitHub Contents API
+  requirement, confirmed against docs.github.com/en/rest/repos/contents), an existing file at
+  the same path includes it, so re-running a publish for the same `{lang, slug}` updates
+  in place rather than erroring.
+- **View-count beacon is out of this connector's scope entirely** — that's
+  `POST /api/v2/public/pageview` (story fbcc07b5, sprintable backend, separate agent). The
+  landing page's blog detail route calls it directly (`fetch(keepalive)`), independent of
+  how the post got committed.
+
+```
+GITHUB_TOKEN=<repo-scoped PAT with Contents write access>
+```
+(`repo`/`branch`/`path_template`/`site_base_url` are **not** secrets — they're `org_config`
+fields the calling agent passes directly into `publish_site_post`, same convention as
+`publish_stibee_campaign`'s `create.senderEmail`/`create.listId`: the server does not
+auto-inject registered org_config values into a publish call, the caller is expected to know
+them — from `describe_connector` + whatever surfaced them at `set_connector_config` time.)
+
 ### Common contract for all publish connectors (story 6f2034cf)
 
 Every connector wired to an `external_publish` gate — Stibee, Threads, Instagram, and any
