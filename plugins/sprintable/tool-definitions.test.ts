@@ -10,6 +10,7 @@ import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './connectors/site_git.schema'
+import { SITE_CONNECTOR_DESCRIPTOR } from './connectors/site.schema'
 import { contentFieldNames } from './connectors/connector-schema'
 
 function toolByName(name: string) {
@@ -76,9 +77,9 @@ describe('publish_instagram_post — content_package 드리프트 0 (기계적 �
   })
 })
 
-describe('publish_site_post — content_package 드리프트 0 (기계적 파생, story a32c9f1a)', () => {
+describe('publish_site_post_git — content_package 드리프트 0 (기계적 파생, story a32c9f1a → 4213f6c4 개명)', () => {
   test('SITE_GIT_CONNECTOR_DESCRIPTOR의 content 필드(title·body·slug·lang·summary·tags)가 inputSchema.properties에 정확히 존재한다', () => {
-    const tool = toolByName('publish_site_post')
+    const tool = toolByName('publish_site_post_git')
     expect(tool.inputSchema.properties.title).toMatchObject({ type: 'string' })
     expect(tool.inputSchema.properties.body).toMatchObject({ type: 'string' })
     expect(tool.inputSchema.properties.slug).toMatchObject({ type: 'string' })
@@ -88,7 +89,7 @@ describe('publish_site_post — content_package 드리프트 0 (기계적 파생
   })
 
   test('title·body·slug·lang만 required(summary·tags는 선택) — SITE_GIT_CONNECTOR_DESCRIPTOR의 required 플래그 그대로 반영', () => {
-    const tool = toolByName('publish_site_post')
+    const tool = toolByName('publish_site_post_git')
     for (const name of contentFieldNames(SITE_GIT_CONNECTOR_DESCRIPTOR)) {
       const field = SITE_GIT_CONNECTOR_DESCRIPTOR.fields.find((f) => f.name === name)!
       if (field.required) expect(tool.inputSchema.required).toContain(name)
@@ -97,7 +98,7 @@ describe('publish_site_post — content_package 드리프트 0 (기계적 파생
   })
 
   test('org_config 필드(repo·branch·path_template·site_base_url)는 publish_stibee_campaign의 create.senderEmail 등과 동형 관례로 이 도구가 직접 받는다(서버 자동주입 없음) — 넷 다 required', () => {
-    const tool = toolByName('publish_site_post')
+    const tool = toolByName('publish_site_post_git')
     expect(tool.inputSchema.properties.repo).toMatchObject({ type: 'string' })
     expect(tool.inputSchema.properties.branch).toMatchObject({ type: 'string' })
     expect(tool.inputSchema.properties.path_template).toMatchObject({ type: 'string' })
@@ -108,10 +109,46 @@ describe('publish_site_post — content_package 드리프트 0 (기계적 파생
   })
 })
 
+describe('publish_site_post — content_package 드리프트 0 (기계적 파생, story 4213f6c4 — 기본 채널)', () => {
+  test('SITE_CONNECTOR_DESCRIPTOR의 content 필드(title·body·slug·lang·summary·tags)가 inputSchema.properties에 정확히 존재한다', () => {
+    const tool = toolByName('publish_site_post')
+    expect(tool.inputSchema.properties.title).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.body).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.slug).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.lang).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.summary).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.tags).toMatchObject({ type: 'array' })
+  })
+
+  test('title·body·slug·lang·summary 전부 required(tags만 선택) — SITE_CONNECTOR_DESCRIPTOR의 required 플래그 그대로 반영(site_git과 달리 summary도 필수, 서버 실측)', () => {
+    const tool = toolByName('publish_site_post')
+    for (const name of contentFieldNames(SITE_CONNECTOR_DESCRIPTOR)) {
+      const field = SITE_CONNECTOR_DESCRIPTOR.fields.find((f) => f.name === name)!
+      if (field.required) expect(tool.inputSchema.required).toContain(name)
+      else expect(tool.inputSchema.required).not.toContain(name)
+    }
+  })
+
+  test('org_config 필드는 site_base_url 하나뿐(repo·branch·path_template 없음 — 서버가 저장소를 안 건드린다)', () => {
+    const tool = toolByName('publish_site_post')
+    expect(tool.inputSchema.properties.site_base_url).toMatchObject({ type: 'string' })
+    expect(tool.inputSchema.properties.repo).toBeUndefined()
+    expect(tool.inputSchema.properties.branch).toBeUndefined()
+    expect(tool.inputSchema.properties.path_template).toBeUndefined()
+    expect(tool.inputSchema.required).toContain('site_base_url')
+  })
+
+  test('work_item은 필수, gate_id는 선택(서버 요청 바디에서 work_item_id가 항상 필수라는 계약과 일치)', () => {
+    const tool = toolByName('publish_site_post')
+    expect(tool.inputSchema.required).toContain('work_item')
+    expect(tool.inputSchema.required).not.toContain('gate_id')
+  })
+})
+
 describe('describe_connector — 도구 정의 존재·계약', () => {
-  test('describe_connector 도구가 등록돼 있고 connector enum이 threads/stibee/instagram/site_git 넷 다 포함한다', () => {
+  test('describe_connector 도구가 등록돼 있고 connector enum이 threads/stibee/instagram/site_git/site 다섯 다 포함한다', () => {
     const tool = toolByName('describe_connector')
-    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['instagram', 'site_git', 'stibee', 'threads'])
+    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['instagram', 'site', 'site_git', 'stibee', 'threads'])
     expect(tool.inputSchema.required).toEqual(['connector'])
   })
 })
@@ -127,10 +164,10 @@ describe('get_threads_insights — 도구 정의 존재·계약(#3321)', () => {
 })
 
 describe('register_connector_schema / set_connector_config — 도구 정의 존재·계약(#3317)', () => {
-  test('register_connector_schema는 connector만 필수·enum이 threads/stibee/instagram/site_git 넷 다 포함', () => {
+  test('register_connector_schema는 connector만 필수·enum이 threads/stibee/instagram/site_git/site 다섯 다 포함', () => {
     const tool = toolByName('register_connector_schema')
     expect(tool.inputSchema.required).toEqual(['connector'])
-    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['instagram', 'site_git', 'stibee', 'threads'])
+    expect((tool.inputSchema.properties.connector as { enum: string[] }).enum.sort()).toEqual(['instagram', 'site', 'site_git', 'stibee', 'threads'])
   })
 
   test('set_connector_config는 connector·config 둘 다 필수', () => {

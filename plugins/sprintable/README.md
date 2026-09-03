@@ -161,14 +161,48 @@ INSTAGRAM_USER_ID=<ig-business-account-id>
 (no `configure-instagram` skill yet — out of this story's wiring scope; env is set by hand
 for now, same shape as `configure-threads`/`configure-stibee` will eventually cover.)
 
-## Marketing publish connector — 자사 사이트(git 기반 정적 사이트) (story a32c9f1a)
+## Marketing publish connector — 자사 사이트, default channel = `site` (story 4213f6c4)
 
-`connectors/site_git.ts` — the first channel that reaches the outside world **without any
-external social account**: approved posts get committed as markdown files directly to an
-org-configured git repo (via the GitHub Contents API), which the repo's own deploy pipeline
-then publishes. Grounded against the actual `sprintable-landing` repo (Next.js 16, App
-Router, `@cloudflare/next-on-pages` → Cloudflare Pages, push-to-`main` auto-deploy) rather
-than assumed.
+`connectors/site.ts`, tool `publish_site_post` — the **default** own-site publish channel as
+of 2026-09-03 (선생님 확定: "글 1편=커밋 1건은 구조적으로 틀림"). Posts are rows in the
+Sprintable backend now (story #3360/e5731937), not files — publishing means one
+`POST /api/v2/organizations/{org_id}/site-posts` call, nothing else: no GitHub PAT, no repo
+coordinates, no commit, no deploy. A new post shows up on `sprintable-landing`'s `/ko/blog`
+within that API's cache TTL (60s).
+
+Grounded directly against `backend/app/routers/site_posts.py` +
+`backend/app/services/site_posts.py` (not assumed): request body is
+`{work_item_id (always required — different contract from every other connector here, which
+all accept "gate_id OR work_item_id"), gate_id (optional), title, slug, lang, summary
+(required, unlike site_git), tags[], body_md}`. **The server is the sole authority on
+approval** — `_resolve_approved_gate()` does its own gate lookup and returns 403
+(`ExternalPublishGateNotApprovedError`) with a detail string that already contains
+`gate_id=…, status=…` verbatim; `site.ts` doesn't reformat that message, it just throws it.
+`site.ts` still runs its own client-side `assertGateApproved(ForWorkItem)` check before
+calling (same `gate-check.ts` functions every other connector uses) — purely a fail-fast to
+skip a doomed round trip, not the actual authorization boundary.
+
+**Only one chokepoint, not two** — every other connector here does two network calls
+(create-then-publish, or GET-sha-then-PUT) and needs a chokepoint before each to close the
+race window between them. `site.ts` makes exactly one call (the `POST` itself), so there's no
+"between" for a second check to defend — the server's own re-verification at that instant is
+the equivalent of chokepoint②. Don't add a second client-side check here reflexively; there's
+nothing for it to protect against that the first one doesn't already cover (see the comment
+above `publishSitePost` in `site.ts` for the full reasoning, and `connectors/registry.ts::
+resolveOrgId()` — reused as-is, not reimplemented — for how `org_id` gets resolved before the
+first outbound call).
+
+## Marketing publish connector — 자사 사이트(git 기반 정적 사이트), legacy channel = `site_git` (story a32c9f1a)
+
+`connectors/site_git.ts`, tool `publish_site_post_git` — the **original** own-site channel,
+predating story 4213f6c4's server-side redesign above. Kept for organizations that
+specifically want a git-committed static site (their own deploy pipeline, their own repo) —
+approved posts get committed as markdown files directly to an org-configured git repo (via
+the GitHub Contents API), which the repo's own deploy pipeline then publishes. Grounded
+against the actual `sprintable-landing` repo (Next.js 16, App Router,
+`@cloudflare/next-on-pages` → Cloudflare Pages, push-to-`main` auto-deploy) rather than
+assumed — though that repo itself has since migrated to the `site` connector's API (story
+15a18511) and no longer reads these files.
 
 Same two-chokepoint shape as Threads/Stibee/Instagram (see "Common contract" below) — ①
 before any GitHub call (including the read-only sha lookup — outbound is outbound, matching
@@ -221,15 +255,19 @@ first, change it in one place, both sides read this section**:
 SITE_GIT_GITHUB_TOKEN=<repo-scoped PAT with Contents write access>
 ```
 (`repo`/`branch`/`path_template`/`site_base_url` are **not** secrets — they're `org_config`
-fields the calling agent passes directly into `publish_site_post`, same convention as
+fields the calling agent passes directly into `publish_site_post_git`, same convention as
 `publish_stibee_campaign`'s `create.senderEmail`/`create.listId`: the server does not
 auto-inject registered org_config values into a publish call, the caller is expected to know
 them — from `describe_connector` + whatever surfaced them at `set_connector_config` time.)
 
 ### Common contract for all publish connectors (story 6f2034cf)
 
-Every connector wired to an `external_publish` gate — Stibee, Threads, Instagram, and any
-future channel — follows the same two-chokepoint shape, not a per-connector judgment call:
+Every connector wired to an `external_publish` gate — Stibee, Threads, Instagram, `site_git`,
+and any future channel — follows the same two-chokepoint shape, not a per-connector judgment
+call. The one deliberate exception is `site` (story 4213f6c4): it makes a single outbound call
+(the server does its own final gate check server-side), so there's no "between two calls"
+window for a second client-side chokepoint to guard — see that connector's own section above
+for the reasoning, not a case of the contract being skipped.
 
 1. **Chokepoint ① fires before the first external write**, not after some subset of calls
    deemed "prep." There is no such thing as a write that "doesn't count" because it's early

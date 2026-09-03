@@ -15,6 +15,7 @@ import { THREADS_CONNECTOR_DESCRIPTOR } from './threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './instagram.schema'
 import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './site_git.schema'
+import { SITE_CONNECTOR_DESCRIPTOR } from './site.schema'
 
 const SAMPLE: ConnectorDescriptor = {
   connectorKey: 'sample',
@@ -59,20 +60,22 @@ describe('toWireDescriptor (#3317 — PO 확定 wire 형상)', () => {
     expect(Object.keys(noEnv)).not.toContain('requires_env')
   })
 
-  test('실 커넥터 정본(threads·stibee·instagram·site_git) 전부 — requiresEnv 이름이 fields에 중복 선언되지 않는다(비밀 유출 0 구조 증명)', () => {
+  test('실 커넥터 정본(threads·stibee·instagram·site_git·site) 전부 — requiresEnv 이름이 fields에 중복 선언되지 않는다(비밀 유출 0 구조 증명)', () => {
     expect(hasSecretLeakInFields(THREADS_CONNECTOR_DESCRIPTOR)).toBe(false)
     expect(hasSecretLeakInFields(STIBEE_CONNECTOR_DESCRIPTOR)).toBe(false)
     expect(hasSecretLeakInFields(INSTAGRAM_CONNECTOR_DESCRIPTOR)).toBe(false)
     expect(hasSecretLeakInFields(SITE_GIT_CONNECTOR_DESCRIPTOR)).toBe(false)
+    expect(hasSecretLeakInFields(SITE_CONNECTOR_DESCRIPTOR)).toBe(false)
   })
 
-  test('⭐페드루 요청(디디군 PR B 그라운딩) — wire 최상위 kinds가 실제 배선된 능력과 일치한다: threads=publish+measure(#3321), stibee=publish만, instagram=publish만(story a98dfbea), site_git=publish만(story a32c9f1a)', () => {
+  test('⭐페드루 요청(디디군 PR B 그라운딩) — wire 최상위 kinds가 실제 배선된 능력과 일치한다: threads=publish+measure(#3321), stibee=publish만, instagram=publish만(story a98dfbea), site_git=publish만(story a32c9f1a), site=publish만(story 4213f6c4)', () => {
     // .sort()는 배열을 제자리에서 바꾼다 — toWireDescriptor가 정본 배열의 사본을 주더라도
     // 습관적으로 원본을 오염시키는 실수를 재현하지 않게, 정렬 없이 Set으로 비교한다.
     expect(new Set(toWireDescriptor(THREADS_CONNECTOR_DESCRIPTOR).kinds)).toEqual(new Set(['publish', 'measure']))
     expect(toWireDescriptor(STIBEE_CONNECTOR_DESCRIPTOR).kinds).toEqual(['publish'])
     expect(toWireDescriptor(INSTAGRAM_CONNECTOR_DESCRIPTOR).kinds).toEqual(['publish'])
     expect(toWireDescriptor(SITE_GIT_CONNECTOR_DESCRIPTOR).kinds).toEqual(['publish'])
+    expect(toWireDescriptor(SITE_CONNECTOR_DESCRIPTOR).kinds).toEqual(['publish'])
   })
 
   test('toWireDescriptor(...).kinds는 정본 배열의 사본이다 — 호출부가 건드려도 정본이 안 바뀐다', () => {
@@ -106,6 +109,11 @@ describe('__fixtures__ 픽스처 드리프트 pin (#3317 PR#31 — 디디군 백
   test('site_git.content-package.json == toWireDescriptor(SITE_GIT_CONNECTOR_DESCRIPTOR) — connectors/__fixtures__/site_git.content-package.json(story a32c9f1a)', async () => {
     const fixture = await Bun.file(new URL('./__fixtures__/site_git.content-package.json', import.meta.url)).json()
     expect(fixture).toEqual(toWireDescriptor(SITE_GIT_CONNECTOR_DESCRIPTOR))
+  })
+
+  test('site.content-package.json == toWireDescriptor(SITE_CONNECTOR_DESCRIPTOR) — connectors/__fixtures__/site.content-package.json(story 4213f6c4)', async () => {
+    const fixture = await Bun.file(new URL('./__fixtures__/site.content-package.json', import.meta.url)).json()
+    expect(fixture).toEqual(toWireDescriptor(SITE_CONNECTOR_DESCRIPTOR))
   })
 })
 

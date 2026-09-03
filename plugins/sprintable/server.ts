@@ -30,13 +30,17 @@ import {
 } from './connectors/stibee'
 import { publishThreadsPost, getThreadsInsightsAndRecordEvidence } from './connectors/threads'
 import { publishInstagramPost } from './connectors/instagram'
-import { publishSitePost } from './connectors/site_git'
+// story 4213f6c4 — 두 파일이 같은 이름(publishSitePost)을 export한다(site_git.ts=레거시
+// GitHub 커밋, site.ts=신규 Sprintable API 직접 발행) — alias로 충돌 회피.
+import { publishSitePost as publishSitePostGit } from './connectors/site_git'
+import { publishSitePost } from './connectors/site'
 import { GateNotApprovedError, NoGateFoundError } from './connectors/gate-check'
 import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './connectors/site_git.schema'
+import { SITE_CONNECTOR_DESCRIPTOR } from './connectors/site.schema'
 import { registerConnectorSchema, updateConnectorConfig, ConnectorConfigForbiddenError } from './connectors/registry'
 
 function resolveConnectorDescriptor(key: string): ConnectorDescriptor | undefined {
@@ -44,6 +48,7 @@ function resolveConnectorDescriptor(key: string): ConnectorDescriptor | undefine
   if (key === 'stibee') return STIBEE_CONNECTOR_DESCRIPTOR
   if (key === 'instagram') return INSTAGRAM_CONNECTOR_DESCRIPTOR
   if (key === 'site_git') return SITE_GIT_CONNECTOR_DESCRIPTOR
+  if (key === 'site') return SITE_CONNECTOR_DESCRIPTOR
   return undefined
 }
 import { TOOL_DEFINITIONS } from './tool-definitions'
@@ -395,7 +400,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           throw err
         }
       }
-      case 'publish_site_post': {
+      case 'publish_site_post_git': {
         const githubToken = (process.env.SITE_GIT_GITHUB_TOKEN ?? '').trim()
         if (!githubToken) {
           throw new Error('SITE_GIT_GITHUB_TOKEN not configured — set it in the plugin env first')
@@ -417,7 +422,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const pathTemplate = String(args.path_template ?? '')
         const siteBaseUrl = String(args.site_base_url ?? '')
         try {
-          const result = await publishSitePost({
+          const result = await publishSitePostGit({
             gateId,
             workItemId: workItem,
             workItemType,
@@ -431,7 +436,47 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             sprintableApiKey: API_KEY,
             siteGit: { githubToken, repo, branch, pathTemplate, siteBaseUrl },
           })
-          logEvent('site_post_publish_sent', { gate_id: gateId, work_item: workItem, commit_sha: result.commitSha, url: result.url })
+          logEvent('site_post_git_publish_sent', { gate_id: gateId, work_item: workItem, commit_sha: result.commitSha, url: result.url })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof GateNotApprovedError) {
+            logEvent('site_post_git_publish_blocked', { gate_id: gateId, work_item: workItem, gate_status: err.gateStatus })
+          } else if (err instanceof NoGateFoundError) {
+            logEvent('site_post_git_publish_no_gate', { work_item: workItem })
+          }
+          throw err
+        }
+      }
+      case 'publish_site_post': {
+        // story 4213f6c4 — 기본 채널(Sprintable API 직접 발행, GitHub PAT 불요). gate_id
+        // 선택, work_item은 서버 요청 바디에서도 항상 필수(site.ts 상단 주석 참고).
+        const gateId = args.gate_id ? String(args.gate_id) : undefined
+        const workItem = String(args.work_item ?? '')
+        if (!workItem) throw new Error('work_item is required')
+        const workItemType = args.work_item_type ? String(args.work_item_type) : undefined
+        const title = String(args.title ?? '')
+        const body = String(args.body ?? '')
+        const slug = String(args.slug ?? '')
+        const lang = String(args.lang ?? '')
+        const summary = String(args.summary ?? '')
+        const tags = Array.isArray(args.tags) ? args.tags.map(String) : undefined
+        const siteBaseUrl = String(args.site_base_url ?? '')
+        try {
+          const result = await publishSitePost({
+            gateId,
+            workItemId: workItem,
+            workItemType,
+            title,
+            body,
+            slug,
+            lang,
+            summary,
+            tags,
+            sprintableApiUrl: API_URL,
+            sprintableApiKey: API_KEY,
+            site: { siteBaseUrl },
+          })
+          logEvent('site_post_publish_sent', { gate_id: gateId, work_item: workItem, post_id: result.id, url: result.url })
           return { content: [{ type: 'text', text: JSON.stringify(result) }] }
         } catch (err) {
           if (err instanceof GateNotApprovedError) {
@@ -445,13 +490,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'describe_connector': {
         const connector = String(args.connector ?? '')
         const descriptor = resolveConnectorDescriptor(connector)
-        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', 'instagram', or 'site_git')`)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', 'instagram', 'site_git', or 'site')`)
         return { content: [{ type: 'text', text: JSON.stringify(toWireDescriptor(descriptor)) }] }
       }
       case 'register_connector_schema': {
         const connector = String(args.connector ?? '')
         const descriptor = resolveConnectorDescriptor(connector)
-        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', 'instagram', or 'site_git')`)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', 'instagram', 'site_git', or 'site')`)
         const result = await registerConnectorSchema(toWireDescriptor(descriptor), {
           apiUrl: API_URL, apiKey: API_KEY,
         })
@@ -461,7 +506,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'set_connector_config': {
         const connector = String(args.connector ?? '')
         const descriptor = resolveConnectorDescriptor(connector)
-        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', 'instagram', or 'site_git')`)
+        if (!descriptor) throw new Error(`unknown connector: ${connector} (expected 'threads', 'stibee', 'instagram', 'site_git', or 'site')`)
         const config = (args.config ?? {}) as Record<string, unknown>
         try {
           const result = await updateConnectorConfig(descriptor, config, { apiUrl: API_URL, apiKey: API_KEY })

@@ -1,0 +1,56 @@
+{
+  "connector_key": "site",
+  "version": "1.0.0",
+  "channel": "site",
+  "kinds": [
+    "publish"
+  ],
+  "fields": [
+    {
+      "name": "title",
+      "type": "string",
+      "source": "content",
+      "required": true
+    },
+    {
+      "name": "body",
+      "type": "string",
+      "source": "content",
+      "required": true
+    },
+    {
+      "name": "slug",
+      "type": "string",
+      "source": "content",
+      "required": true
+    },
+    {
+      "name": "lang",
+      "type": "string",
+      "source": "content",
+      "required": true
+    },
+    {
+      "name": "summary",
+      "type": "string",
+      "source": "content",
+      "required": true
+    },
+    {
+      "name": "tags",
+      "type": "array",
+      "source": "content",
+      "required": false,
+      "constraints": {
+        "itemType": "string"
+      }
+    },
+    {
+      "name": "site_base_url",
+      "type": "string",
+      "source": "org_config",
+      "required": true,
+      "setup_hint": "공개 사이트 주소(예: https://sprintable.ai) — 조직 설정 화면에 등록"
+    }
+  ]
+}

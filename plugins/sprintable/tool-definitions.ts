@@ -17,6 +17,7 @@ import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
 import { SITE_GIT_CONNECTOR_DESCRIPTOR } from './connectors/site_git.schema'
+import { SITE_CONNECTOR_DESCRIPTOR } from './connectors/site.schema'
 import { contentPropertiesToJsonSchema } from './connectors/connector-schema'
 
 const threadsContentSchema = contentPropertiesToJsonSchema(THREADS_CONNECTOR_DESCRIPTOR)
@@ -26,6 +27,9 @@ const instagramContentSchema = contentPropertiesToJsonSchema(INSTAGRAM_CONNECTOR
 // story a32c9f1a — site_git도 flat content 필드(title/body/slug/lang/summary/tags,
 // dot-path 없음)라 같은 기계적 파생 경로.
 const siteGitContentSchema = contentPropertiesToJsonSchema(SITE_GIT_CONNECTOR_DESCRIPTOR)
+// story 4213f6c4 — site(Sprintable API 직접 발행)도 flat content 필드(title/body/slug/
+// lang/summary/tags, dot-path 없음)라 같은 기계적 파생 경로.
+const siteContentSchema = contentPropertiesToJsonSchema(SITE_CONNECTOR_DESCRIPTOR)
 
 export interface ToolDefinition {
   name: string
@@ -272,14 +276,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // (evidence/logging).
     // story #3317: title/body/slug/lang/summary/tags는 SITE_GIT_CONNECTOR_DESCRIPTOR
     // (connectors/site_git.schema.ts)에서 기계적으로 파생 — 손으로 따로 안 쓴다.
-    name: 'publish_site_post',
+    // story 4213f6c4(PO 확定, #3360 §4) — 도구명을 `publish_site_post_git`으로 개명(레거시).
+    // 기본 채널은 이제 `publish_site_post`(site.ts, Sprintable API 직접 발행) — site_git은
+    // git 기반 정적 사이트를 직접 커밋하고 싶은 조직을 위해 남겨둔다(README §자사 사이트
+    // 발행 채널: 기본=site 참고).
+    name: 'publish_site_post_git',
     description:
-      'Commit an approved blog post as a markdown file to the organization\'s configured ' +
-      'static-site git repo (GitHub Contents API), gated on an approved external_publish Gate. ' +
-      'Pass gate_id explicitly, or omit it to resolve the latest external_publish gate for ' +
-      'work_item instead. The commit is blocked unless the resolved gate reports status ' +
-      'approved or auto_passed — calling this tool does not itself authorize the publish. ' +
-      'Returns the commit sha and the expected published URL.',
+      'Legacy channel — commit an approved blog post as a markdown file to the organization\'s ' +
+      'configured static-site git repo (GitHub Contents API), gated on an approved ' +
+      'external_publish Gate. Prefer publish_site_post (Sprintable API) unless the organization ' +
+      'specifically wants a git-committed static site. Pass gate_id explicitly, or omit it to ' +
+      'resolve the latest external_publish gate for work_item instead. The commit is blocked ' +
+      'unless the resolved gate reports status approved or auto_passed — calling this tool does ' +
+      'not itself authorize the publish. Returns the commit sha and the expected published URL.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -311,6 +320,53 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    // story 4213f6c4(PO 확定, #3360 §4) — 자사 사이트 발행의 **기본 채널**. site_git.ts와
+    // 달리 GitHub PAT·저장소 좌표가 필요 없다 — 서버(backend/app/routers/site_posts.py)가
+    // work item의 external_publish 게이트를 그 자리에서 최종 판정한다(실측, 추정 0). 이
+    // 도구를 호출하는 것 자체는 승인의 증거가 아니다 — 미승인이면 서버가 403을 gate_id·
+    // status가 박힌 문구 그대로 돌려주고, 이 도구는 그 문구를 재가공 없이 던진다.
+    // ⚠️requiresEnv 0 — 이 플러그인이 이미 가진 Sprintable API 키만 쓴다(별도 자격증명
+    // 설정 불요, site_git과 가장 큰 차이).
+    // story #3312 AC5 동형: gate_id가 없으면 work_item(+work_item_type)으로 최신
+    // external_publish 게이트를 클라이언트에서도 사전 확認한다(서버 재확認 이전의
+    // fail-fast — API 호출 자체를 아낀다). work_item은 서버 요청 바디에서도 항상 필수다
+    // (site_git 등 "gate_id 또는 work_item 둘 중 하나"와 다른 계약, 실측).
+    // story #3317: title/body/slug/lang/summary/tags는 SITE_CONNECTOR_DESCRIPTOR
+    // (connectors/site.schema.ts)에서 기계적으로 파생 — 손으로 따로 안 쓴다.
+    name: 'publish_site_post',
+    description:
+      'Publish an approved blog post to the organization\'s own site via the Sprintable ' +
+      'site-posts API (no git commit, no deploy), gated on an approved external_publish Gate. ' +
+      'work_item is always required (the server resolves/verifies the gate from it); gate_id is ' +
+      'optional and, when given, must match that exact gate. The server makes the final ' +
+      'approval decision — calling this tool does not itself authorize the publish, and an ' +
+      'unapproved gate returns a 403 whose message already contains the gate id and status. ' +
+      'Returns the post id and the expected published URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        gate_id: {
+          type: 'string',
+          description: 'The external_publish Gate id this publish task is linked to — optional, ' +
+            'must match work_item\'s gate if given.',
+        },
+        ...siteContentSchema.properties,
+        site_base_url: { type: 'string', description: 'Public site base URL for computing the published post URL — from org_config.' },
+        work_item: {
+          type: 'string',
+          description: 'Story/task id this publish belongs to — always required by the server, ' +
+            'and the gate-resolution key when gate_id is omitted.',
+        },
+        work_item_type: {
+          type: 'string',
+          description: 'Type of work_item for the client-side gate pre-check — defaults to "story".',
+        },
+      },
+      required: [...siteContentSchema.required, 'site_base_url', 'work_item'],
+      additionalProperties: false,
+    },
+  },
+  {
     // story #3317 — 조회 전용(부작용 0). content_package 계약(connector-schema.ts
     // toWireDescriptor 형상)을 그대로 반환 — 백엔드가 조직 커넥터 레지스트리 등록에
     // 소비할 계약(AC2, 등록 엔드포인트 자체는 별도 스토리). apply-time 검사가 "필수
@@ -325,7 +381,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee', 'instagram', 'site_git'],
+          enum: ['threads', 'stibee', 'instagram', 'site_git', 'site'],
           description: 'Which connector to describe.',
         },
       },
@@ -387,7 +443,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee', 'instagram', 'site_git'],
+          enum: ['threads', 'stibee', 'instagram', 'site_git', 'site'],
           description: 'Which connector to register.',
         },
       },
@@ -413,7 +469,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         connector: {
           type: 'string',
-          enum: ['threads', 'stibee', 'instagram', 'site_git'],
+          enum: ['threads', 'stibee', 'instagram', 'site_git', 'site'],
           description: 'Which connector to configure.',
         },
         config: {
