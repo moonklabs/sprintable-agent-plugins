@@ -23,6 +23,7 @@ import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta } from './channel-notification-meta'
+import { formatToolError } from './tool-error'
 import {
   publishStibeeCampaign,
   type CreateEmailRequest,
@@ -40,6 +41,7 @@ import {
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
+  ChannelPostGateAlreadyHeldError,
   ChannelPostDraftNotFoundError,
 } from './connectors/channel-posts'
 import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
@@ -383,6 +385,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             logEvent('channel_post_draft_submit_connection_not_active', { draft_id: draftId })
           } else if (err instanceof ChannelPostApproverRoleMissingError) {
             logEvent('channel_post_draft_submit_approver_role_missing', { draft_id: draftId })
+          } else if (err instanceof ChannelPostGateAlreadyHeldError) {
+            logEvent('channel_post_draft_submit_gate_already_held', {
+              draft_id: draftId, holding_draft_id: err.holdingDraftId,
+            })
           }
           throw err
         }
@@ -542,10 +548,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         }
     }
   } catch (err) {
-    return {
-      content: [{ type: 'text', text: `${req.params.name}: ${err instanceof Error ? err.message : err}` }],
-      isError: true,
-    }
+    // story #3405 — 구조화 에러(code/httpStatus/detail 계약을 만족하는 커넥터, 지금은
+    // channel-posts.ts)는 formatToolError가 JSON으로 조립한다. 그 계약을 안 따르는
+    // 나머지 커넥터·일반 Error는 예전과 같은 평문 한 줄(회귀 0) — tool-error.ts 참고.
+    return formatToolError(req.params.name, err)
   }
 })
 

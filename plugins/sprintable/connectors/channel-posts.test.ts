@@ -10,9 +10,11 @@ import {
   createOrUpdateChannelPostDraft,
   submitChannelPostDraft,
   listAgentVisibleChannelConnections,
+  ChannelPostApiError,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
+  ChannelPostGateAlreadyHeldError,
   ChannelPostDraftNotFoundError,
 } from './channel-posts'
 
@@ -117,6 +119,62 @@ describe('createOrUpdateChannelPostDraft (story #3399 AC2, server #3374)', () =>
       createOrUpdateChannelPostDraft({ workItemId: 'wi-1', connectionId: 'conn-1', text: 'hi' }, { ...API, fetchImpl }),
     ).rejects.toThrow('channel post draft create/update failed: 500')
   })
+
+  test('⭐story #3405 — 던진 에러가 code·httpStatus·detail(구조화 계약)을 싣는다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ detail: { code: 'CHANNEL_CONNECTION_NOT_ACTIVE', message: '연결이 비활성입니다' } }),
+        { status: 409 },
+      ),
+    )
+    try {
+      await createOrUpdateChannelPostDraft({ workItemId: 'wi-1', connectionId: 'conn-1', text: 'hi' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      const e = err as ChannelPostConnectionNotActiveError
+      expect(e.code).toBe('CHANNEL_CONNECTION_NOT_ACTIVE')
+      expect(e.httpStatus).toBe(409)
+      expect(e.detail).toEqual({ code: 'CHANNEL_CONNECTION_NOT_ACTIVE', message: '연결이 비활성입니다' })
+    }
+  })
+
+  test('⭐story #3405 AC2 — 미지 409 code는 기반 클래스(ChannelPostApiError)로 원문 그대로, 특정 서브클래스로 추측하지 않는다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ detail: { code: 'SOME_BRAND_NEW_CODE_NEVER_SEEN_BEFORE', message: '처음 보는 에러' } }),
+        { status: 409 },
+      ),
+    )
+    try {
+      await createOrUpdateChannelPostDraft({ workItemId: 'wi-1', connectionId: 'conn-1', text: 'hi' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      // 정확히 기반 클래스여야 한다 — ConnectionNotActiveError 등 구체 서브클래스가 아님.
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ChannelPostConnectionNotActiveError)
+      const e = err as ChannelPostApiError
+      expect(e.code).toBe('SOME_BRAND_NEW_CODE_NEVER_SEEN_BEFORE')
+      expect(e.message).toBe('처음 보는 에러')
+      expect(e.httpStatus).toBe(409)
+    }
+  })
+
+  test('⭐story #3405 AC2 — 미지 422 code도 마찬가지로 기반 클래스, TextTooLongError로 추측하지 않는다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ detail: { code: 'SOME_OTHER_422_CODE', message: '다른 422 사유' } }),
+        { status: 422 },
+      ),
+    )
+    try {
+      await createOrUpdateChannelPostDraft({ workItemId: 'wi-1', connectionId: 'conn-1', text: 'hi' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ChannelPostTextTooLongError)
+      expect((err as ChannelPostApiError).code).toBe('SOME_OTHER_422_CODE')
+    }
+  })
 })
 
 describe('submitChannelPostDraft (story #3399 AC3, server #3374)', () => {
@@ -175,6 +233,53 @@ describe('submitChannelPostDraft (story #3399 AC3, server #3374)', () => {
     await expect(
       submitChannelPostDraft({ draftId: 'draft-1' }, { ...API, fetchImpl }),
     ).rejects.toThrow(ChannelPostConnectionNotActiveError)
+  })
+
+  test('⭐story #3405/#3404 — 409 CHANNEL_POST_GATE_ALREADY_HELD는 ChannelPostGateAlreadyHeldError로 정확히 분류된다(과거엔 ConnectionNotActiveError로 오분류됐던 자리)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: 'CHANNEL_POST_GATE_ALREADY_HELD', message: '이 work item은 다른 초안이 이미 승인 절차 중입니다',
+            holding_draft_id: 'draft-a', holding_channel: 'threads', holding_connection_id: 'conn-a',
+          },
+        }),
+        { status: 409 },
+      ),
+    )
+    try {
+      await submitChannelPostDraft({ draftId: 'draft-b' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostGateAlreadyHeldError)
+      expect(err).not.toBeInstanceOf(ChannelPostConnectionNotActiveError)
+      const e = err as ChannelPostGateAlreadyHeldError
+      expect(e.code).toBe('CHANNEL_POST_GATE_ALREADY_HELD')
+      expect(e.httpStatus).toBe(409)
+      expect(e.holdingDraftId).toBe('draft-a')
+      expect(e.holdingChannel).toBe('threads')
+      expect(e.holdingConnectionId).toBe('conn-a')
+      expect(e.detail).toMatchObject({ holding_draft_id: 'draft-a' })
+    }
+  })
+
+  test('⭐story #3405 AC2 — submit의 미지 409 code도 기반 클래스로 원문 통과, 어느 구체 서브클래스로도 안 떨어진다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ detail: { code: 'SOME_FUTURE_SUBMIT_409_CODE', message: '아직 모르는 사유' } }),
+        { status: 409 },
+      ),
+    )
+    try {
+      await submitChannelPostDraft({ draftId: 'draft-1' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ChannelPostConnectionNotActiveError)
+      expect(err).not.toBeInstanceOf(ChannelPostApproverRoleMissingError)
+      expect(err).not.toBeInstanceOf(ChannelPostGateAlreadyHeldError)
+      expect((err as ChannelPostApiError).code).toBe('SOME_FUTURE_SUBMIT_409_CODE')
+    }
   })
 })
 
