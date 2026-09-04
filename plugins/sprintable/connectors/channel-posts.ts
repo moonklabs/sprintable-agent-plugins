@@ -135,15 +135,30 @@ interface ParsedErrorDetail {
 
 async function parseErrorDetail(res: Response): Promise<ParsedErrorDetail> {
   try {
-    const body = (await res.json()) as { detail?: unknown }
-    if (typeof body.detail === 'string') return { message: body.detail }
-    if (body.detail && typeof body.detail === 'object') {
-      const d = body.detail as Record<string, unknown>
+    const body = (await res.json()) as { error?: unknown; detail?: unknown }
+    // story #3410 — BE 전역 핸들러(backend/app/main.py::http_exception_handler)가 이 앱이
+    // raise하는 모든 HTTPException(문자열/dict detail 불문)을
+    // `{"data":null,"error":{code,message,...},"meta":null}` 봉투로 감싼다 — `detail` 키
+    // 자체가 응답에 없다(라이브 실증: dev `GET .../channel-posts/drafts/<random-uuid>` →
+    // `{"error":{"code":"NOT_FOUND",...}}`). `body.error`가 정본.
+    if (body.error && typeof body.error === 'object') {
+      const e = body.error as Record<string, unknown>
       return {
-        code: typeof d.code === 'string' ? d.code : undefined,
-        message: typeof d.message === 'string' ? d.message : undefined,
-        detail: d,
+        code: typeof e.code === 'string' ? e.code : undefined,
+        message: typeof e.message === 'string' ? e.message : undefined,
+        detail: e,
       }
+    }
+    // FastAPI 기본 RequestValidationError(422) 폴백 — 이 라우터엔 커스텀 validation
+    // handler가 없어 그 기본 shape(문자열 또는 `[{loc,msg,type},...]` 배열)가 그대로 올 수
+    // 있다. 이 경로는 code를 절대 안 준다(FastAPI 자체가 안 줌) — 지어내지 않는다. ⚠️일반
+    // dict `body.detail`(code 필드 포함) 파싱은 의도적으로 없다 — main.py가 존재하는 한
+    // 서버는 그 shape를 절대 안 내므로(story #3410), 있었다면 그 자체가 폴백이 실제로는
+    // 한 번도 아닌 「거짓 초록」을 만드는 자리였다(양성대조 테스트가 이걸 고정한다).
+    if (typeof body.detail === 'string') return { message: body.detail }
+    if (Array.isArray(body.detail)) {
+      const first = body.detail[0] as { msg?: unknown } | undefined
+      return { message: typeof first?.msg === 'string' ? first.msg : undefined }
     }
     return {}
   } catch {
