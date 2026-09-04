@@ -22,7 +22,13 @@
 export const EXTERNAL_PUBLISH_MOVED_TO_PLATFORM = 'EXTERNAL_PUBLISH_MOVED_TO_PLATFORM'
 
 /** 비재시도 오류(AC1) — retryable:false로 명시해 재시도 루프가 이 에러를 재시도 대상으로
- * 오인하지 않게 한다. 메시지에는 다음 행동(AC5)을 항상 포함한다. */
+ * 오인하지 않게 한다. 메시지에는 다음 행동(AC5)을 항상 포함한다.
+ *
+ * story #3406(2026-09-04) — 이 클래스는 이미 `code`를 갖고 있어(위 EXTERNAL_PUBLISH_
+ * MOVED_TO_PLATFORM) `../tool-error.ts::StructuredToolError` 계약(code 필수)을 별도
+ * 수정 없이 만족한다 — `httpStatus`는 없다(이 함수는 fetch를 전혀 안 하는 순수 로컬
+ * 판정이라 실제 HTTP 실패가 없다, 지어내지 않는다). `tool-error.test.ts`가 실제
+ * 클래스로 이 자동 편입을 확認한다. */
 export class ExternalPublishMovedToPlatformError extends Error {
   readonly code = EXTERNAL_PUBLISH_MOVED_TO_PLATFORM
   readonly retryable = false

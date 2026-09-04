@@ -19,9 +19,15 @@
  * 안 된/이번에 안 쓰는 건 안 짓는다). 필요해지면 별도 스토리.
  * ⚠️YAML frontmatter는 라이브러리 없이 손으로 직렬화한다(필드 집합이 작고 고정 — 값은
  * 항상 큰따옴표로 감싸 콜론·특수문자 모호성을 원천 차단, 배열은 인라인 `[...]`).
+ *
+ * story #3406(2026-09-04) — 이 파일의 에러들도 `code`(구조화 계약)를 갖는다. story #3366
+ * 동결로 지금은 실행 도달 불가지만(instagram.ts/stibee.ts와 동형 사유) 일관성을 위해
+ * 그대로 구조화한다.
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
 import { assertExternalPublishNotFrozen } from './publish-freeze'
+import { ConnectorHttpError } from './http-error'
+import { GateReferenceRequiredError } from './gate-reference-required'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -55,6 +61,8 @@ const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 const LANG_RE = /^[a-z]{2}(-[A-Z]{2})?$/
 
 export class SlugOrLangInvalidError extends Error {
+  readonly code = 'SLUG_OR_LANG_INVALID'
+
   constructor(public readonly field: 'slug' | 'lang', public readonly value: string) {
     super(`publishSitePost: ${field}=${JSON.stringify(value)} does not match the required shape — refusing to resolve a file path from it`)
     this.name = 'SlugOrLangInvalidError'
@@ -123,7 +131,7 @@ async function siteGitGetFileSha(path: string, config: SiteGitClientConfig): Pro
     },
   })
   if (res.status === 404) return null
-  if (!res.ok) throw new Error(`site_git file sha lookup failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('site_git file sha lookup', res.status)
   const body = (await res.json()) as GitHubContentsGetResponse
   return body.sha
 }
@@ -155,7 +163,7 @@ async function siteGitCommitFile(
       ...(sha ? { sha } : {}),
     }),
   })
-  if (!res.ok) throw new Error(`site_git commit failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('site_git commit', res.status)
   const body = (await res.json()) as { commit: { sha: string; html_url: string } }
   return { commitSha: body.commit.sha, htmlUrl: body.commit.html_url }
 }
@@ -207,7 +215,7 @@ async function assertPublishGateApproved(params: PublishSitePostParams): Promise
     )
     return
   }
-  throw new Error('publishSitePost requires either gateId or workItemId to check the external_publish gate')
+  throw new GateReferenceRequiredError('publishSitePost')
 }
 
 /**
@@ -228,7 +236,7 @@ export async function publishSitePost(
   assertExternalPublishNotFrozen('publish_site_post')
 
   if (!params.gateId && !params.workItemId) {
-    throw new Error('publishSitePost requires either gateId or workItemId to check the external_publish gate')
+    throw new GateReferenceRequiredError('publishSitePost')
   }
 
   // ⭐경로 조작 방어(PR#37 PO 리뷰) — chokepoint①보다도 먼저, GitHub 호출은 물론

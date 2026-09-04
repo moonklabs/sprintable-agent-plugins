@@ -11,6 +11,8 @@
  * pin한다 — 호출부가 매번 손으로 다시 짜지 않게.
  */
 
+import { ConnectorHttpError } from './http-error'
+
 export interface RecordEvidenceParams {
   workItemId: string
   workItemType: string
@@ -46,7 +48,7 @@ export async function recordEvidence(params: RecordEvidenceParams): Promise<Reco
     }),
   })
   if (!res.ok) {
-    throw new Error(`evidence create failed: ${res.status}`)
+    throw new ConnectorHttpError('evidence create', res.status)
   }
   const body = (await res.json()) as { id: string }
   return { id: body.id }

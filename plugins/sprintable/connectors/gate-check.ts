@@ -9,7 +9,14 @@
  * (defense-in-depth, PO 리뷰 확인 포인트: doc stibee-publish-connector-wiring-design-3292
  * §③). 인증 관례는 hitl_approval_hook.py의 _post_message/_poll_for_decision과 동일
  * (Authorization Bearer + x-agent-api-key 헤더, agent API키) — 신규 인증 경로 발명 0.
+ *
+ * story #3406(2026-09-04) — 이 파일의 에러들은 전부 `code`(구조화 계약, `../tool-error.ts`)
+ * 를 갖는다. `GateNotApprovedError`·`NoGateFoundError`·`GateFilterMismatchError`는 HTTP
+ * 200을 받은 뒤 응답 payload 내용으로 거부하는 **로컬 판정**이라 `httpStatus`는 없다
+ * (지어내지 않는다 — 그 판정을 만든 HTTP 실패 자체가 없다). 실제 `!res.ok` 지점은
+ * `../connectors/http-error.ts::ConnectorHttpError`로 통일(HTTP_<status> 코드 합성).
  */
+import { ConnectorHttpError } from './http-error'
 
 const APPROVED_GATE_STATUSES = new Set(['approved', 'auto_passed'])
 
@@ -20,6 +27,8 @@ export function isApprovedGateStatus(status: string): boolean {
 }
 
 export class GateNotApprovedError extends Error {
+  readonly code = 'GATE_NOT_APPROVED'
+
   constructor(public readonly gateStatus: string) {
     super(`external_publish gate is ${gateStatus}, not approved/auto_passed — publish blocked`)
     this.name = 'GateNotApprovedError'
@@ -30,6 +39,8 @@ export class GateNotApprovedError extends Error {
  * gate가 0건). 「게이트가 있는데 미승인」(GateNotApprovedError)과는 다른 케이스라 별도
  * 타입으로 구별한다 — 호출부가 "아직 대기" vs "승인 거부"를 다르게 다룰 수 있게. */
 export class NoGateFoundError extends Error {
+  readonly code = 'NO_GATE_FOUND'
+
   constructor(public readonly workItemId: string, public readonly gateType: string) {
     super(`no ${gateType} gate found yet for work_item_id=${workItemId} — approve stage hasn't run`)
     this.name = 'NoGateFoundError'
@@ -59,7 +70,7 @@ export async function assertGateApproved(
     },
   })
   if (!res.ok) {
-    throw new Error(`gate lookup failed: ${res.status}`)
+    throw new ConnectorHttpError('gate lookup', res.status)
   }
   const gate = (await res.json()) as GateStatusResponse
   if (!isApprovedGateStatus(gate.status)) {
@@ -89,6 +100,8 @@ interface GateListResponseEntry {
  * 실제로 그랬던 클래스) 이 함수가 그걸 발행 승인으로 오독하면 안 된다. 응답 첫 건의
  * gate_type/work_item_id/work_item_type이 요청값과 다르면 fail-closed. */
 export class GateFilterMismatchError extends Error {
+  readonly code = 'GATE_FILTER_MISMATCH'
+
   constructor(
     public readonly requested: { workItemId: string; workItemType: string; gateType: string },
     public readonly received: { workItemId: string; workItemType: string; gateType: string },
@@ -140,7 +153,7 @@ export async function resolveLatestGate(
     },
   })
   if (!res.ok) {
-    throw new Error(`gate list lookup failed: ${res.status}`)
+    throw new ConnectorHttpError('gate list lookup', res.status)
   }
   const gates = (await res.json()) as GateListResponseEntry[]
   if (gates.length === 0) {

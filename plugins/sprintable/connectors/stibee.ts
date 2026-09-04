@@ -11,9 +11,15 @@
  * ⚠️전부 "일반 이메일"만 대상(자동 이메일 미지원) — content/PUT은 draft 상태에서만 동작.
  * ⚠️M1 스코프 — 실계정 실발행은 M3(별도 사람 승인). 이 모듈 자체는 축 무관하게 항상
  * chokepoint를 강제한다(dry-run 여부는 호출부/환경 문제, 이 모듈이 판단하지 않는다).
+ *
+ * story #3406(2026-09-04) — 이 파일의 에러들도 `code`(구조화 계약)를 갖는다. story #3366
+ * 동결로 지금은 실행 도달 불가지만(instagram.ts와 동형 사유) 일관성을 위해 그대로
+ * 구조화한다.
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
 import { assertExternalPublishNotFrozen } from './publish-freeze'
+import { ConnectorHttpError } from './http-error'
+import { GateReferenceRequiredError } from './gate-reference-required'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -70,7 +76,7 @@ async function stibeeCreateEmail(
     headers: stibeeHeaders(config.accessToken, 'application/json'),
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`stibee create email failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('stibee create email', res.status)
   return (await res.json()) as { id: number }
 }
 
@@ -84,7 +90,7 @@ async function stibeeSetContent(
     headers: stibeeHeaders(config.accessToken, 'text/html'),
     body: html,
   })
-  if (!res.ok) throw new Error(`stibee set content failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('stibee set content', res.status)
 }
 
 async function stibeeUpdateEmail(
@@ -96,7 +102,7 @@ async function stibeeUpdateEmail(
     headers: stibeeHeaders(config.accessToken, 'application/json'),
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`stibee update email failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('stibee update email', res.status)
 }
 
 async function stibeeSendEmail(emailId: number, config: StibeeClientConfig): Promise<void> {
@@ -105,7 +111,7 @@ async function stibeeSendEmail(emailId: number, config: StibeeClientConfig): Pro
     method: 'POST',
     headers: stibeeHeaders(config.accessToken),
   })
-  if (!res.ok) throw new Error(`stibee send failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('stibee send', res.status)
 }
 
 export interface PublishStibeeCampaignParams {
@@ -149,7 +155,7 @@ async function assertPublishGateApproved(params: PublishStibeeCampaignParams): P
     )
     return
   }
-  throw new Error('publishStibeeCampaign requires either gateId or workItemId to check the external_publish gate')
+  throw new GateReferenceRequiredError('publishStibeeCampaign')
 }
 
 /**
@@ -176,7 +182,7 @@ export async function publishStibeeCampaign(
   assertExternalPublishNotFrozen('publish_stibee_campaign')
 
   if (!params.gateId && !params.workItemId) {
-    throw new Error('publishStibeeCampaign requires either gateId or workItemId to check the external_publish gate')
+    throw new GateReferenceRequiredError('publishStibeeCampaign')
   }
 
   // ⭐chokepoint① — create/content/update 등 어떤 스티비 호출보다도 먼저. 미승인이면

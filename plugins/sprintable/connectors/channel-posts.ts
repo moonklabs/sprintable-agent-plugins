@@ -46,19 +46,29 @@ function apiBase(apiUrl: string): string {
 
 /**
  * story #3405 — 이 파일의 모든 에러가 공유하는 기반. `../tool-error.ts`가 duck-typing으로
- * 찾는 계약(`httpStatus: number` 존재)을 만족한다. **미지 code의 최종 낙착지**이기도
- * 하다 — 서버가 새 코드를 추가해도 이 클래스 그대로 code/message/detail을 보존해 던지므로
- * 플러그인이 그 코드를 몰라도 에이전트에게 원문이 살아서 간다(오분류보다 훨씬 안전).
+ * 찾는 계약(`code: string` 존재, story #3406부터 판별 기준)을 만족한다. **미지 code의
+ * 최종 낙착지**이기도 하다 — 서버가 새 코드를 추가해도 이 클래스 그대로 code/message/
+ * detail을 보존해 던지므로 플러그인이 그 코드를 몰라도 에이전트에게 원문이 살아서 간다
+ * (오분류보다 훨씬 안전).
+ *
+ * story #3406 — 서버가 `code`를 안 준 응답(detail이 평문 문자열이거나, code 필드가
+ * 없는 객체)은 `HTTP_<status>`로 합성한다 — "지어냄"이 아니라 "실제로 관측한 HTTP
+ * status를 안정 문자열로 표현"이다(서버 payload를 새로 짓지 않는다, `httpStatus` 자체는
+ * 항상 실측값). `code`가 항상 채워지므로 이 클래스의 인스턴스는 `tool-error.ts`의
+ * 구조화 판별을 예외 없이 통과한다.
  */
 export class ChannelPostApiError extends Error {
+  public readonly code: string
+
   constructor(
     message: string,
-    public readonly code: string | undefined,
+    code: string | undefined,
     public readonly httpStatus: number,
     public readonly detail?: unknown,
   ) {
     super(message)
     this.name = 'ChannelPostApiError'
+    this.code = code ?? `HTTP_${httpStatus}`
   }
 }
 
@@ -106,7 +116,11 @@ export class ChannelPostGateAlreadyHeldError extends ChannelPostApiError {
 
 export class ChannelPostDraftNotFoundError extends ChannelPostApiError {
   constructor(message: string, httpStatus: number, detail?: unknown) {
-    super(message, undefined, httpStatus, detail) // 서버가 404 detail을 평문 문자열로만 준다 — code 없음(지어내지 않는다).
+    // story #3406 — 서버가 404 detail을 평문 문자열로만 줘서 code가 없지만(원래 "지어내지
+    // 않는다"고 undefined로 뒀던 자리), 이 클라이언트 클래스 자체가 이미 "draft 없음"을
+    // 정확히 아는 상황이라 그 사실을 안정 code로 표현하는 것은 지어냄이 아니다(합성
+    // HTTP_404보다 구체적 — 어느 404인지 알려준다).
+    super(message, 'CHANNEL_POST_DRAFT_NOT_FOUND', httpStatus, detail)
     this.name = 'ChannelPostDraftNotFoundError'
   }
 }

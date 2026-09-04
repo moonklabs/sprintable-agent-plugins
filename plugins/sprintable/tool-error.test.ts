@@ -1,16 +1,19 @@
 /**
- * story #3405 — server.ts를 직접 import할 수 없어(mcp.connect()·SSE dial-out이 모듈 로드
- * 시점 부작용) 공용 catch의 실제 동작은 이 파일을 통해서만 단위테스트할 수 있다(server.ts는
- * 이 함수 하나를 부를 뿐이므로, 이 테스트가 곧 공용 catch의 계약 테스트다).
+ * story #3405/#3406 — server.ts를 직접 import할 수 없어(mcp.connect()·SSE dial-out이
+ * 모듈 로드 시점 부작용) 공용 catch의 실제 동작은 이 파일을 통해서만 단위테스트할 수 있다
+ * (server.ts는 이 함수 하나를 부를 뿐이므로, 이 테스트가 곧 공용 catch의 계약 테스트다).
  */
 import { describe, test, expect } from 'bun:test'
 import { formatToolError } from './tool-error'
+import { ExternalPublishMovedToPlatformError } from './connectors/publish-freeze'
+import { GateNotApprovedError } from './connectors/gate-check'
+import { ConnectorHttpError } from './connectors/http-error'
 
 class FakeStructuredError extends Error {
   constructor(
     message: string,
-    public readonly code: string | undefined,
-    public readonly httpStatus: number,
+    public readonly code: string,
+    public readonly httpStatus?: number,
     public readonly detail?: unknown,
   ) {
     super(message)
@@ -18,7 +21,7 @@ class FakeStructuredError extends Error {
   }
 }
 
-describe('formatToolError — 구조화 에러(StructuredToolError 계약)', () => {
+describe('formatToolError — 구조화 에러(StructuredToolError 계약, story #3406: code 필수·httpStatus 선택)', () => {
   test('⭐409 CHANNEL_POST_GATE_ALREADY_HELD — code·http_status·detail(holding_draft_id 등)이 전부 파싱 가능한 JSON으로 나간다', () => {
     const err = new FakeStructuredError(
       '이 work item은 다른 초안이 이미 승인 절차 중입니다', 'CHANNEL_POST_GATE_ALREADY_HELD', 409,
@@ -69,21 +72,55 @@ describe('formatToolError — 구조화 에러(StructuredToolError 계약)', () 
     expect(parsed.code).not.toBe('CHANNEL_POST_APPROVER_ROLE_MISSING')
   })
 
-  test('code가 없는 구조화 에러(서버가 code를 안 준 404 등)는 code:null — 지어내지 않는다', () => {
-    const err = new FakeStructuredError('draft를 찾을 수 없습니다: x', undefined, 404, undefined)
+  test('⭐story #3406 — httpStatus가 없는(로컬 판정) 구조화 에러는 http_status:null — 없는 HTTP 실패를 지어내지 않는다', () => {
+    const err = new FakeStructuredError('external_publish gate is pending, not approved', 'GATE_NOT_APPROVED')
     const result = formatToolError('submit_channel_post_draft', err)
     const parsed = JSON.parse(result.content[0].text)
-    expect(parsed.code).toBeNull()
+    expect(parsed.code).toBe('GATE_NOT_APPROVED')
+    expect(parsed.http_status).toBeNull()
     expect(parsed.detail).toBeNull()
-    expect(parsed.http_status).toBe(404)
   })
 })
 
-describe('formatToolError — 구조화 계약을 안 따르는 에러는 예전과 같은 평문 한 줄(회귀 0)', () => {
-  test('일반 Error(httpStatus 없음)는 `tool: message` 평문으로 나간다', () => {
+describe('formatToolError — story #3406, 실제 커넥터 클래스 통합 확認(다른 커넥터도 구조화됨)', () => {
+  test('⭐ExternalPublishMovedToPlatformError(publish-freeze.ts) — 코드 수정 없이 자동으로 구조화 편입된다(이미 code를 갖고 있었으므로)', () => {
+    const err = new ExternalPublishMovedToPlatformError('publish_threads_post')
+    const result = formatToolError('publish_threads_post', err)
+    const parsed = JSON.parse(result.content[0].text)
+    expect(parsed.code).toBe('EXTERNAL_PUBLISH_MOVED_TO_PLATFORM')
+    expect(parsed.http_status).toBeNull()
+  })
+
+  test('⭐GateNotApprovedError(gate-check.ts) — 로컬 판정이라 http_status는 null, code는 채워진다', () => {
+    const err = new GateNotApprovedError('pending')
+    const result = formatToolError('submit_channel_post_draft', err)
+    const parsed = JSON.parse(result.content[0].text)
+    expect(parsed.code).toBe('GATE_NOT_APPROVED')
+    expect(parsed.http_status).toBeNull()
+  })
+
+  test('⭐ConnectorHttpError(http-error.ts) — 실 HTTP 실패라 http_status가 실측값으로 채워진다', () => {
+    const err = new ConnectorHttpError('stibee create email', 500)
+    const result = formatToolError('publish_stibee_campaign', err)
+    const parsed = JSON.parse(result.content[0].text)
+    expect(parsed.code).toBe('HTTP_500')
+    expect(parsed.http_status).toBe(500)
+  })
+})
+
+describe('formatToolError — code가 없는 에러는 구조화 계약을 안 따르는 것으로 간주(예전과 같은 평문 한 줄, 회귀 0)', () => {
+  test('code 속성 자체가 없는 일반 Error는 `tool: message` 평문으로 나간다', () => {
     const result = formatToolError('reply', new Error('work_item is required'))
     expect(result.content[0].text).toBe('reply: work_item is required')
     expect(() => JSON.parse(result.content[0].text)).toThrow()
+  })
+
+  test('httpStatus만 있고 code가 없는 에러(구 계약 잔재)도 이제는 평문으로 떨어진다(판별 기준이 code로 바뀌었으므로)', () => {
+    class LegacyShapeError extends Error {
+      httpStatus = 500
+    }
+    const result = formatToolError('reply', new LegacyShapeError('legacy shape, no code'))
+    expect(result.content[0].text).toBe('reply: legacy shape, no code')
   })
 
   test('Error가 아닌 값(문자열 throw 등)도 예전과 동일하게 처리된다', () => {
