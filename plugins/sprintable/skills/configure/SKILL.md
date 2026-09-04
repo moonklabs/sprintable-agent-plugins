@@ -108,6 +108,11 @@ JSON object, not a plain sentence. Parse it, don't pattern-match the English/Kor
 
 - **`code`** is the field to branch on, not `message` (message is free-text and may change
   wording). It's always present — every structured tool error carries a stable `code`.
+- **A `code` shaped `HTTP_<status>`** (e.g. `HTTP_500`) means the underlying tool call hit
+  that HTTP status but the server didn't attach its own stable `code` to explain why —
+  the plugin synthesizes this from the **HTTP status it actually observed**, it isn't
+  inventing a diagnosis. Treat it the same as an unrecognized code below: stop and surface
+  it, don't guess what specifically went wrong beyond "server returned `<status>`".
 - **`http_status`** is `null` when the failure isn't an HTTP response at all — a local
   judgment (e.g. the server answered 200 but the content itself is rejected, like a
   not-yet-approved gate) or a pure input-validation error that never made a network call.
