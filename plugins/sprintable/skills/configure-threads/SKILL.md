@@ -131,15 +131,19 @@ plain sentence. Parse it, don't pattern-match the English/Korean text:
   `detail.max_length`/`detail.current_length` tell you exactly how much to trim, no need to
   guess), `CHANNEL_POST_APPROVER_ROLE_MISSING` (409 — an org-config problem, not something a
   retry fixes), `CHANNEL_POST_GATE_ALREADY_HELD` (409, story #3404 — another draft on the
-  same work item already holds the approval gate; `detail.holding_draft_id` names it).
+  same work item already holds the approval gate; `detail.holding_draft_id` names it). This
+  one won't resolve by retrying either — same result every time as long as that other draft
+  holds the gate. The draft named by `detail.holding_draft_id` has to be approved or rejected
+  first; surface that id to a human as-is (don't guess which draft it is or resolve it
+  yourself).
 - **`code` can be `null`** — the server doesn't always attach one (e.g. draft-not-found 404s
   give only a message). Treat `null` the same as an unrecognized code: read `message`, don't
   assume a specific failure mode.
 - **An unrecognized `code`** (one not in the list above — the server added something new
   since this skill was last updated) still arrives with its real value and `detail` intact —
-  the plugin never relabels it as one of the known codes above. Read `message` and `detail`
-  as-is and decide case by case; don't assume it means `CHANNEL_CONNECTION_NOT_ACTIVE` or any
-  other specific code just because it's unfamiliar.
+  the plugin never relabels it as one of the known codes above. **Stop and surface `code`,
+  `message`, and `detail` to a human as-is** — don't treat it as one of the known codes above
+  just because it's unfamiliar, and don't decide on your own what it probably means.
 - This shape applies to these two tools only (story #3405 scope). Other tools
   (`publish_stibee_campaign` etc.) still return a plain-string error — that's a separate,
   not-yet-fixed gap, tracked outside this story.
