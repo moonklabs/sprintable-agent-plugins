@@ -22,9 +22,16 @@
  * 추가한다(스코프 밖 선언, Threads AC4 동형 기능이 이 스토리엔 없음).
  * ⚠️M4 스코프 — 실계정 실발행은 착수 조건(M3 Threads 실발행 후) 충족 뒤 별도. 이 모듈
  * 자체는 축 무관하게 항상 chokepoint를 강제한다.
+ *
+ * story #3406(2026-09-04) — 이 파일의 에러들도 `code`(구조화 계약)를 갖는다. 이 도구는
+ * story #3366으로 동결(assertExternalPublishNotFrozen이 항상 먼저 던짐)돼 아래 에러들이
+ * 지금은 실행 도달 불가지만, 서버 어댑터가 나중에 로직을 선별 재사용할 대상이라(#3366 PO
+ * 지시로 코드 유지) 일관성을 위해 그대로 구조화한다.
  */
 import { assertGateApproved, assertGateApprovedForWorkItem } from './gate-check'
 import { assertExternalPublishNotFrozen } from './publish-freeze'
+import { ConnectorHttpError } from './http-error'
+import { GateReferenceRequiredError } from './gate-reference-required'
 
 const EXTERNAL_PUBLISH_GATE_TYPE = 'external_publish'
 const DEFAULT_WORK_ITEM_TYPE = 'story'
@@ -54,7 +61,7 @@ async function instagramCreateContainer(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ image_url: params.imageUrl, ...(params.caption ? { caption: params.caption } : {}) }),
   })
-  if (!res.ok) throw new Error(`instagram create container failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('instagram create container', res.status)
   return (await res.json()) as { id: string }
 }
 
@@ -67,7 +74,7 @@ async function instagramPublishContainer(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ creation_id: creationId }),
   })
-  if (!res.ok) throw new Error(`instagram publish failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('instagram publish', res.status)
   return (await res.json()) as { id: string }
 }
 
@@ -115,7 +122,7 @@ async function assertPublishGateApproved(params: PublishInstagramPostParams): Pr
     )
     return
   }
-  throw new Error('publishInstagramPost requires either gateId or workItemId to check the external_publish gate')
+  throw new GateReferenceRequiredError('publishInstagramPost')
 }
 
 /**
@@ -137,7 +144,7 @@ export async function publishInstagramPost(
   assertExternalPublishNotFrozen('publish_instagram_post')
 
   if (!params.gateId && !params.workItemId) {
-    throw new Error('publishInstagramPost requires either gateId or workItemId to check the external_publish gate')
+    throw new GateReferenceRequiredError('publishInstagramPost')
   }
 
   // ⭐chokepoint① — media 컨테이너 생성을 포함한 어떤 Instagram 호출보다도 먼저. 이 줄을

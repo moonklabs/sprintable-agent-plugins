@@ -91,6 +91,48 @@ launch env (`AGENT_API_KEY`/`SPRINTABLE_API_KEY`) also isolates — real env win
 
 ---
 
+## Reading tool error responses
+
+story #3405/#3406 (2026-09-04) — when any Sprintable tool call fails, the response is a
+JSON object, not a plain sentence. Parse it, don't pattern-match the English/Korean text:
+
+```json
+{
+  "tool": "submit_channel_post_draft",
+  "code": "CHANNEL_POST_GATE_ALREADY_HELD",
+  "message": "이 work item은 다른 초안이 이미 승인 절차 중입니다(...)",
+  "http_status": 409,
+  "detail": { "holding_draft_id": "...", "holding_channel": "threads", "holding_connection_id": "..." }
+}
+```
+
+- **`code`** is the field to branch on, not `message` (message is free-text and may change
+  wording). It's always present — every structured tool error carries a stable `code`.
+- **A `code` shaped `HTTP_<status>`** (e.g. `HTTP_500`) means the underlying tool call hit
+  that HTTP status but the server didn't attach its own stable `code` to explain why —
+  the plugin synthesizes this from the **HTTP status it actually observed**, it isn't
+  inventing a diagnosis. Treat it the same as an unrecognized code below: stop and surface
+  it, don't guess what specifically went wrong beyond "server returned `<status>`".
+- **`http_status`** is `null` when the failure isn't an HTTP response at all — a local
+  judgment (e.g. the server answered 200 but the content itself is rejected, like a
+  not-yet-approved gate) or a pure input-validation error that never made a network call.
+  Don't read `null` as "unknown status" — it means there was no HTTP failure to report.
+- **An unrecognized `code`** (one this skill doesn't document below — the plugin added
+  something new since this skill was last updated) still arrives with its real value and
+  `detail` intact. **Stop and surface `code`, `message`, and `detail` to a human as-is** —
+  don't treat it as one of the documented codes just because it's unfamiliar, and don't
+  decide on your own what it probably means.
+- A tool that hasn't adopted this shape yet (a rare remaining gap — check the tool's own
+  skill doc, if any) still returns a plain `"<tool>: <message>"` string instead. If you get
+  a plain string where you expected JSON, that's it working as intended for that tool, not
+  an error in this doc.
+
+Per-tool code lists (which codes exist, what each one means, who to escalate to) live in
+that tool's own skill doc — see `/sprintable:configure-threads` for the channel-posts tools'
+codes, for example.
+
+---
+
 ## Implementation notes
 
 - The channels dir may not exist until the server first runs. Missing file = not

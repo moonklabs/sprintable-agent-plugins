@@ -211,6 +211,20 @@ describe('submitChannelPostDraft (story #3399 AC3, server #3374)', () => {
     ).rejects.toThrow(ChannelPostDraftNotFoundError)
   })
 
+  test('⭐story #3406 — 404(서버가 code 없이 평문 detail만 줌)도 code가 채워진다(CHANNEL_POST_DRAFT_NOT_FOUND, 지어낸 게 아니라 이 클래스가 이미 아는 사실)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(JSON.stringify({ detail: 'draft를 찾을 수 없습니다: draft-x' }), { status: 404 }),
+    )
+    try {
+      await submitChannelPostDraft({ draftId: 'draft-x' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      const e = err as ChannelPostDraftNotFoundError
+      expect(e.code).toBe('CHANNEL_POST_DRAFT_NOT_FOUND')
+      expect(e.httpStatus).toBe(404)
+    }
+  })
+
   test('⭐409 CHANNEL_POST_APPROVER_ROLE_MISSING은 ChannelPostApproverRoleMissingError로 구별된다(다른 409와 분기)', async () => {
     const { fetchImpl } = meAndEndpointSpy('org-1', () =>
       new Response(

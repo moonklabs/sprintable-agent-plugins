@@ -12,6 +12,7 @@ import {
   threadsGetInsights,
   threadsGetPublishingLimit,
   getThreadsInsightsAndRecordEvidence,
+  WorkItemIdRequiredError,
 } from './threads'
 
 describe('threadsGetPublishingLimit (#3311 AC4)', () => {
@@ -174,7 +175,7 @@ describe('getThreadsInsightsAndRecordEvidence (#3321 — measure 단계 도구, 
         threads: { accessToken: 't', userId: 'u', fetchImpl: insights.fetchImpl },
         evidenceFetchImpl: evidence.fetchImpl,
       }),
-    ).rejects.toThrow('requires workItemId')
+    ).rejects.toThrow(WorkItemIdRequiredError)
     expect(insights.calls).toHaveLength(0)
     expect(evidence.calls).toHaveLength(0)
   })

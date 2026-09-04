@@ -20,8 +20,13 @@
  * createOrUpdateChannelPostDraft`/`submitChannelPostDraft` — 발행(POST .../publish) 자체는
  * 서버가 human-only(`CHANNEL_POST_PUBLISH_HUMAN_ONLY`, story f8f7cb0f)라 플러그인엔 절대
  * 없다. `get_threads_insights`(측정, 발행 아님)는 그대로 이 파일에 남는다.
+ *
+ * story #3406(2026-09-04) — 이 파일의 에러들도 `code`(구조화 계약)를 갖는다. `!res.ok`는
+ * `ConnectorHttpError`(HTTP_<status>)로, "requires workItemId"는 순수 입력검증(로컬
+ * 판정)이라 전용 code로.
  */
 import { recordEvidence } from './evidence'
+import { ConnectorHttpError } from './http-error'
 
 const DEFAULT_WORK_ITEM_TYPE = 'story'
 
@@ -56,7 +61,7 @@ export async function threadsGetPublishingLimit(
     config.accessToken,
   )
   const res = await fetchImpl(url, { method: 'GET' })
-  if (!res.ok) throw new Error(`threads publishing limit lookup failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('threads publishing limit lookup', res.status)
   const body = (await res.json()) as {
     data: [{ quota_usage: number; config: { quota_total: number } }]
   }
@@ -82,7 +87,7 @@ export async function threadsGetInsights(
     config.accessToken,
   )
   const res = await fetchImpl(url, { method: 'GET' })
-  if (!res.ok) throw new Error(`threads insights lookup failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('threads insights lookup', res.status)
   const body = (await res.json()) as { data: { name: string; values: [{ value: number }] }[] }
   const metric = (name: string) => body.data.find((m) => m.name === name)?.values[0]?.value ?? 0
   return {
@@ -116,6 +121,16 @@ export interface GetThreadsInsightsAndRecordEvidenceResult extends ThreadsInsigh
   evidenceError?: string
 }
 
+/** story #3406 — 순수 입력검증(네트워크 호출 자체가 없음, 로컬 판정). */
+export class WorkItemIdRequiredError extends Error {
+  readonly code = 'WORK_ITEM_ID_REQUIRED'
+
+  constructor(public readonly functionName: string) {
+    super(`${functionName} requires workItemId (evidence attribution)`)
+    this.name = 'WorkItemIdRequiredError'
+  }
+}
+
 /**
  * story #3321([M5·마케팅자동화] measure 단계 도구) — insights 조회 + evidence 기록을
  * 한 호출로 묶는다. "측정은 했는데 기록을 깜빡" 갭(전달≠도착 교훈)을 구조로 막는다.
@@ -131,7 +146,7 @@ export async function getThreadsInsightsAndRecordEvidence(
   params: GetThreadsInsightsAndRecordEvidenceParams,
 ): Promise<GetThreadsInsightsAndRecordEvidenceResult> {
   if (!params.workItemId) {
-    throw new Error('getThreadsInsightsAndRecordEvidence requires workItemId (evidence attribution)')
+    throw new WorkItemIdRequiredError('getThreadsInsightsAndRecordEvidence')
   }
 
   const insights = await threadsGetInsights(params.postId, params.threads)

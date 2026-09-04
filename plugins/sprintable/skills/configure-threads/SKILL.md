@@ -110,43 +110,34 @@ file).
 
 ---
 
-## Reading error responses from `create_channel_post_draft` / `submit_channel_post_draft`
+## Reading error responses from the Threads-track tools
 
-story #3405 (2026-09-04) — when these two tools fail, the response is a JSON object, not a
-plain sentence. Parse it, don't pattern-match the English/Korean text:
+See `/sprintable:configure`'s **Reading tool error responses** section first — it covers the
+JSON shape, `http_status: null`, and the "never guess an unrecognized code" rule that apply
+to every Sprintable tool (story #3405/#3406). This section only adds the codes specific to
+`create_channel_post_draft` / `submit_channel_post_draft` / `list_channel_connections` /
+`get_threads_insights`:
 
-```json
-{
-  "tool": "submit_channel_post_draft",
-  "code": "CHANNEL_POST_GATE_ALREADY_HELD",
-  "message": "이 work item은 다른 초안이 이미 승인 절차 중입니다(...)",
-  "http_status": 409,
-  "detail": { "code": "...", "message": "...", "holding_draft_id": "...", "holding_channel": "threads", "holding_connection_id": "..." }
-}
-```
-
-- **`code`** is the field to branch on, not `message` (message is free-text and may change
-  wording). Known codes today: `CHANNEL_CONNECTION_NOT_ACTIVE` (409 — the connection needs
-  re-authorizing, see `/sprintable:configure-threads` above), `CHANNEL_TEXT_TOO_LONG` (422 —
-  `detail.max_length`/`detail.current_length` tell you exactly how much to trim, no need to
-  guess), `CHANNEL_POST_APPROVER_ROLE_MISSING` (409 — an org-config problem, not something a
-  retry fixes), `CHANNEL_POST_GATE_ALREADY_HELD` (409, story #3404 — another draft on the
-  same work item already holds the approval gate; `detail.holding_draft_id` names it). This
-  one won't resolve by retrying either — same result every time as long as that other draft
-  holds the gate. The draft named by `detail.holding_draft_id` has to be approved or rejected
-  first; surface that id to a human as-is (don't guess which draft it is or resolve it
-  yourself).
-- **`code` can be `null`** — the server doesn't always attach one (e.g. draft-not-found 404s
-  give only a message). Treat `null` the same as an unrecognized code: read `message`, don't
-  assume a specific failure mode.
-- **An unrecognized `code`** (one not in the list above — the server added something new
-  since this skill was last updated) still arrives with its real value and `detail` intact —
-  the plugin never relabels it as one of the known codes above. **Stop and surface `code`,
-  `message`, and `detail` to a human as-is** — don't treat it as one of the known codes above
-  just because it's unfamiliar, and don't decide on your own what it probably means.
-- This shape applies to these two tools only (story #3405 scope). Other tools
-  (`publish_stibee_campaign` etc.) still return a plain-string error — that's a separate,
-  not-yet-fixed gap, tracked outside this story.
+- `CHANNEL_CONNECTION_NOT_ACTIVE` (409) — the connection needs re-authorizing, see
+  `/sprintable:configure-threads` above.
+- `CHANNEL_TEXT_TOO_LONG` (422) — `detail.max_length`/`detail.current_length` tell you
+  exactly how much to trim, no need to guess.
+- `CHANNEL_POST_APPROVER_ROLE_MISSING` (409) — the organization has no default approval
+  role configured yet. Not something a retry or the submitting agent's own permissions can
+  fix — **escalate to an organization owner/admin** (same audience as the `/sprintable:
+  configure` → `updateConnectorConfig` "owner/admin only" gate; setting the default role is
+  outside what the submitting agent's key can do).
+- `CHANNEL_POST_GATE_ALREADY_HELD` (409, story #3404) — another draft on the same work item
+  already holds the approval gate; `detail.holding_draft_id` names it. Won't resolve by
+  retrying either — same result every time as long as that other draft holds the gate. The
+  draft named by `detail.holding_draft_id` has to be approved or rejected first; surface
+  that id to a human as-is (don't guess which draft it is or resolve it yourself).
+- `CHANNEL_POST_DRAFT_NOT_FOUND` (404) — the draft_id (or version_id) doesn't exist in this
+  org.
+- `GATE_NOT_APPROVED` / `NO_GATE_FOUND` / `WORK_ITEM_ID_REQUIRED` / `HTTP_<status>` — shared
+  codes from the underlying connector helpers (story #3406), can surface from
+  `get_threads_insights`. See `/sprintable:configure`'s common section for what `http_status:
+  null` means for the first three (local judgments, not HTTP failures).
 
 ---
 

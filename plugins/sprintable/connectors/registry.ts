@@ -25,8 +25,13 @@
  * hasSecretLeakInFields로 이미 검증된 정본만 받는다(호출부 책임) ② updateConnectorConfig는
  * assertNoSecretsInConfig로 config 키가 requiresEnv 이름과 겹치면 네트워크 호출 전에 즉시
  * 막는다.
+ *
+ * story #3406(2026-09-04) — 이 파일의 에러들도 전부 `code`(구조화 계약, `../tool-error.ts`)
+ * 를 갖는다. 실제 `!res.ok` 지점은 `ConnectorHttpError`(HTTP_<status>)로, 로컬 판정
+ * (org_id 없음·시크릿 유출 시도)은 각각 전용 code로.
  */
 import type { ConnectorDescriptor, ConnectorDescriptorWire } from './connector-schema'
+import { ConnectorHttpError } from './http-error'
 
 export interface RegistryClientConfig {
   apiUrl: string
@@ -38,19 +43,33 @@ function authHeaders(apiKey: string): HeadersInit {
   return { Authorization: `Bearer ${apiKey}`, 'x-agent-api-key': apiKey, 'Content-Type': 'application/json' }
 }
 
+/** story #3406 — auth/me가 2xx인데 org_id가 없는(에이전트 키에 조직 스코프가 없는) 로컬
+ * 판정. HTTP 자체는 성공이라 httpStatus는 없다. */
+export class AuthMeNoOrgIdError extends Error {
+  readonly code = 'AUTH_ME_NO_ORG_ID'
+
+  constructor() {
+    super('auth/me returned no org_id — agent API key has no organization scope')
+    this.name = 'AuthMeNoOrgIdError'
+  }
+}
+
 /** GET /api/v2/auth/me → org_id. 캐싱 0(등록/설정은 저빈도 호출이라 매번 확인하는 비용이 싸다). */
 export async function resolveOrgId(config: RegistryClientConfig): Promise<string> {
   const fetchImpl = config.fetchImpl ?? fetch
   const res = await fetchImpl(`${config.apiUrl.replace(/\/$/, '')}/api/v2/auth/me`, {
     headers: authHeaders(config.apiKey),
   })
-  if (!res.ok) throw new Error(`auth/me lookup failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('auth/me lookup', res.status)
   const body = (await res.json()) as { org_id: string | null }
-  if (!body.org_id) throw new Error('auth/me returned no org_id — agent API key has no organization scope')
+  if (!body.org_id) throw new AuthMeNoOrgIdError()
   return body.org_id
 }
 
 export class ConnectorConfigForbiddenError extends Error {
+  readonly code = 'CONNECTOR_CONFIG_FORBIDDEN'
+  readonly httpStatus = 403
+
   constructor(public readonly connectorKey: string) {
     super(
       `setting connector config for '${connectorKey}' requires org owner/admin — this agent key is not one. ` +
@@ -90,9 +109,23 @@ export async function registerConnectorSchema(
       }),
     },
   )
-  if (!res.ok) throw new Error(`connector schema register failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('connector schema register', res.status)
   const body = (await res.json()) as { connector_key: string; version: string }
   return { connectorKey: body.connector_key, version: body.version }
+}
+
+/** story #3406 — assertNoSecretsInConfig의 로컬 판정(네트워크 호출 자체가 없는 순수
+ * 입력검증). */
+export class ConnectorConfigSecretLeakError extends Error {
+  readonly code = 'CONNECTOR_CONFIG_SECRET_LEAK'
+
+  constructor(public readonly leakedKeys: string[]) {
+    super(
+      `config keys [${leakedKeys.join(', ')}] match requiresEnv credential names — ` +
+        'secrets must never be sent as connector config, only stored in the local .env',
+    )
+    this.name = 'ConnectorConfigSecretLeakError'
+  }
 }
 
 /**
@@ -103,10 +136,7 @@ export function assertNoSecretsInConfig(descriptor: ConnectorDescriptor, config:
   const envNames = new Set(descriptor.requiresEnv ?? [])
   const leaked = Object.keys(config).filter((k) => envNames.has(k))
   if (leaked.length > 0) {
-    throw new Error(
-      `config keys [${leaked.join(', ')}] match requiresEnv credential names — ` +
-        'secrets must never be sent as connector config, only stored in the local .env',
-    )
+    throw new ConnectorConfigSecretLeakError(leaked)
   }
 }
 
@@ -137,7 +167,7 @@ export async function updateConnectorConfig(
     },
   )
   if (res.status === 403) throw new ConnectorConfigForbiddenError(connectorDescriptor.connectorKey)
-  if (!res.ok) throw new Error(`connector config update failed: ${res.status}`)
+  if (!res.ok) throw new ConnectorHttpError('connector config update', res.status)
   const body = (await res.json()) as { connector_key: string }
   return { connectorKey: body.connector_key }
 }
