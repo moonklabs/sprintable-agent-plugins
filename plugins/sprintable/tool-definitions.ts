@@ -12,6 +12,23 @@
  * 실제로 여기 존재하는지 대조한다. (story #3399 — publish_threads_post 삭제로
  * THREADS_CONNECTOR_DESCRIPTOR 파생은 이제 없다. 대체 도구 create_channel_post_draft는
  * 채널 무관 범용 text 필드라 기계적 파생 대상이 아니다.)
+ *
+ * story #3495(페드루 PO 確定 2026-09-05, 미르코 그라운딩 ③) — channel_post/site_post
+ * 발행 도구 6개(create_channel_post_draft·submit_channel_post_draft·
+ * get_channel_post_publication·create_site_post_draft·submit_site_post_draft·
+ * get_site_post_publication)는 각자 description에 다음 단계를 링크해 두지만, 전체
+ * 흐름을 한눈에 보려면 `skills/publish-content/SKILL.md`가 정본이다 — 여기 요약이
+ * 스킬과 어긋나면 **스킬이 이긴다**(이 요약은 빠른 참조일 뿐, 재작성 시 스킬을 먼저
+ * 고치고 여기를 그대로 따라오게 한다):
+ *
+ *   1. create_*_draft(초안 생성/수정, work_item당 버전 누적)
+ *   2. violations[]가 있으면(콘텐츠 규칙 위반) 필드를 고쳐 create_*_draft 재호출
+ *   3. submit_*_draft(external_publish 게이트로 상신 — 발행 아님)
+ *   4. 휴먼 승인 대기(폴링 도구 없음 — 기다린다, 조르지 않는다)
+ *   5. 승인 뒤: get_*_publication으로 결과 읽기(워커가 자동 발행 — 부를 발행 도구 없음)
+ *   6. command_status 분기: pending/in_progress/failed=조치 없음(워커 자동 재시도) ·
+ *      dead_letter=휴먼에게 command_id와 함께 보고(에이전트 재시도 도구는 이 슬라이스
+ *      범위 밖 — 재시도는 휴먼 화면/엔드포인트 몫).
  */
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
@@ -217,7 +234,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     description:
       'Submit a channel post draft version to the external_publish gate for approval. Defaults to ' +
       'the latest version if version_id is omitted. This does not publish — only a human can approve ' +
-      'and publish it from the Sprintable screen (story #3399, server API #3374).',
+      'and publish it from the Sprintable screen (story #3399, server API #3374). After a human ' +
+      'approves, call get_channel_post_publication to read the permalink/status once published — ' +
+      'do not publish it yourself, there is no tool for that.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -480,7 +499,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Read the publish result for a channel post draft — publication status, permalink, ' +
       'external_id, and command failure/retry info if the publish is pending, failed, or ' +
       'dead-lettered. Read-only, works with an agent API key alone. Returns the backend ' +
-      'response shape as-is (field names unchanged from the REST API).',
+      'response shape as-is (field names unchanged from the REST API). command_status ' +
+      'pending/in_progress/failed = no action, the worker retries automatically; ' +
+      'command_status dead_letter = report it to a human with the command_id, retrying it is a ' +
+      'human action (see the publish-content skill for the full flow).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -536,7 +558,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'human can approve and publish it from the Sprintable screen. On failure (content-rule ' +
       'violation, another draft already holding the Gate for this slug/lang, etc.) the response ' +
       'is a structured error object (code, message, and detail such as violations[] or ' +
-      'holding_draft_id) rather than a generic failure.',
+      'holding_draft_id) rather than a generic failure. After a human approves, call ' +
+      'get_site_post_publication to read the result — do not publish it yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -556,7 +579,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Read the publish result for a site post (blog article) draft — hosted_site publish info, ' +
       'or (if an external destination like WordPress/webhook was set) the channel publication ' +
       'status/permalink and command failure/retry info. Read-only, works with an agent API key ' +
-      'alone. Returns the backend response shape as-is.',
+      'alone. Returns the backend response shape as-is. command_status pending/in_progress/' +
+      'failed = no action, the worker retries automatically; command_status dead_letter = report ' +
+      'it to a human with the command_id, retrying it is a human action (see the publish-content ' +
+      'skill for the full flow).',
     inputSchema: {
       type: 'object',
       properties: {
