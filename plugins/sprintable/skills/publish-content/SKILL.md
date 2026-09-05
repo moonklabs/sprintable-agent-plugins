@@ -24,11 +24,12 @@ and result → failure action).
 2. **Fix content-rule violations, if any** — the create response includes
    `violations: []`. Empty means clean. A non-empty array means the org has content
    rules configured and this draft trips one or more of them (e.g. a banned term, a
-   missing required UTM param). These are *non-blocking at create time* — you can still
-   submit — but story #3471 makes `submit_*_draft` re-check them and reject at that
-   point (see the 422 row in the failure table below). Read each violation's `field` and
-   `hint_key`/`message`, fix the offending content, and call `create_*_draft` again
-   (same work_item) to save a new version before submitting.
+   missing required UTM param). Each entry is `{code, field, value, hint_key,
+   settings_path}` — there is no `message` field, read `field`/`hint_key` to know what
+   to fix. These are *non-blocking at create time* — you can still submit — but story
+   #3471 makes `submit_*_draft` re-check them and reject at that point (see the 422 row
+   in the failure table below). Fix the offending content and call `create_*_draft`
+   again (same work_item) to save a new version before submitting.
 3. **Submit** — `submit_*_draft`. This sends the draft version to the `external_publish`
    approval Gate. **It does not publish anything.** Only a human can approve a Gate from
    the Sprintable screen.
@@ -37,15 +38,30 @@ and result → failure action).
    human approves (or rejects) the Gate on their own schedule, outside your control. If
    your work item tracking expects you to report status, say "submitted, awaiting
    approval" and move on — don't block on this step.
-5. **Read the result — after approval** — `get_channel_post_publication` (channel_post)
-   or `get_site_post_publication` (site_post), passing the same `draft_id`. Once a human
-   approves, a worker publishes it automatically (site_post: the next :05-minute tick;
-   channel_post: at `scheduled_at`, or immediately if none was set) — there is no
-   "publish" tool for you to call. The response carries the current `command_status` /
+5. **Read the result — after approval, what happens next differs by content kind and
+   destination** (`backend/app/services/gate_service.py::
+   _maybe_create_scheduled_publication_command`, confirmed against source, not assumed):
+   - **site_post, external destination (not hosted_site)** — a publication command is
+     created the instant the Gate is approved; the worker picks it up on its next tick
+     (typically within a minute). Call `get_site_post_publication` and expect
+     `command_status` to already be set.
+   - **channel_post with `scheduled_at` set at submit time** — a command is created on
+     approval but the worker only acts on it at that `scheduled_at` time. Call
+     `get_channel_post_publication`; `command_status` will read `pending` until then.
+   - **channel_post with no `scheduled_at` (immediate post)** — **no command is created
+     at all on approval.** Publishing this one is a separate, human-only action from the
+     Sprintable screen (a synchronous "Publish" click, `POST .../channel-posts/drafts/
+     {draft_id}/publish` — no agent tool for it). `get_channel_post_publication` will
+     show a null/absent `command` until a human does that. **This is the expected,
+     normal state — not a stuck draft.** Report it as "approved, waiting for a human to
+     click Publish", not as a failure or a stall on your end.
+   In every case, there is no "publish" tool for *you* to call — either a worker or a
+   human does it, per the branches above. The response carries `command_status` /
    `publication_status` and, once published, `permalink`/`external_id`.
-6. **Branch on the result** — see the table below. Most states need no action; only
-   `dead_letter` does, and even then the action is "tell a human", not "retry it
-   yourself."
+6. **Branch on the result** — see the table below. Most `command_status` values need no
+   action; only `dead_letter` does, and even then the action is "tell a human", not
+   "retry it yourself." A null/absent `command` after approval is its own case — see
+   step 5's third bullet, it isn't one of the table's rows.
 
 ## Failure / status branch table
 
@@ -79,9 +95,11 @@ repeat those.
   creates one from an agent key; a human connects via the Sprintable screen.
 - **Approving or rejecting the Gate** — the entire reason step 3/4 exist as separate
   steps from step 5.
-- **Triggering the actual publish** — there is no `publish_*` tool for this domain.
-  Approval plus the worker tick is what publishes; you never call anything to make it
-  happen.
+- **Triggering the actual publish** — there is no `publish_*` tool for this domain. For
+  site_post and scheduled channel_post, approval plus the worker tick is what publishes.
+  For an immediate (no `scheduled_at`) channel_post, a human must separately click
+  "Publish" on the Sprintable screen after approving — see step 5's third bullet. You
+  never call anything to make any of these happen.
 - **Retrying a `dead_letter` command** — see the table above.
 - **Site_post's own public "publish" endpoint** (`POST .../site-posts`, the *hosted_site*
   publish path, separate from the create/submit/get flow above) is human-only server-side
