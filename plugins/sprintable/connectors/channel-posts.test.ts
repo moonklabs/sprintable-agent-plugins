@@ -10,12 +10,14 @@ import {
   createOrUpdateChannelPostDraft,
   submitChannelPostDraft,
   listAgentVisibleChannelConnections,
+  getChannelPostPublication,
   ChannelPostApiError,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
   ChannelPostGateAlreadyHeldError,
   ChannelPostDraftNotFoundError,
+  ContentRuleViolationError,
 } from './channel-posts'
 
 function meAndEndpointSpy(orgId: string, endpointHandler: (url: string, init?: RequestInit) => Response) {
@@ -319,6 +321,72 @@ describe('submitChannelPostDraft (story #3399 AC3, server #3374)', () => {
       expect(err).not.toBeInstanceOf(ChannelPostGateAlreadyHeldError)
       expect((err as ChannelPostApiError).code).toBe('SOME_FUTURE_SUBMIT_409_CODE')
     }
+  })
+
+  test('⭐story #3489 보정 — 422 CONTENT_RULE_VIOLATION이 이제 violations[]를 그대로 실은 채로 던져진다(예전엔 !res.ok 제네릭 폴백에 눌려 사라졌다)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({
+          data: null,
+          error: {
+            code: 'CONTENT_RULE_VIOLATION', rules_version: 3,
+            violations: [{ code: 'banned_term', field: 'text', value: 'x', hint_key: 'h', settings_path: '/organization/content-rules' }],
+          },
+          meta: null,
+        }),
+        { status: 422 },
+      ),
+    )
+    try {
+      await submitChannelPostDraft({ draftId: 'draft-1' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ContentRuleViolationError)
+      const e = err as ContentRuleViolationError
+      expect(e.code).toBe('CONTENT_RULE_VIOLATION')
+      expect(e.rulesVersion).toBe(3)
+      expect(e.violations).toEqual([{ code: 'banned_term', field: 'text', value: 'x', hint_key: 'h', settings_path: '/organization/content-rules' }])
+    }
+  })
+
+  test('미지 422 code는 기반 클래스로(추측 금지, AC2 동형)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ data: null, error: { code: 'SOME_OTHER_SUBMIT_422', message: 'x' }, meta: null }),
+        { status: 422 },
+      ),
+    )
+    try {
+      await submitChannelPostDraft({ draftId: 'draft-1' }, { ...API, fetchImpl })
+      throw new Error('unreachable')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ContentRuleViolationError)
+      expect((err as ChannelPostApiError).code).toBe('SOME_OTHER_SUBMIT_422')
+    }
+  })
+})
+
+describe('getChannelPostPublication (story #3489, server channel_posts.py:700-703)', () => {
+  test('draft를 GET하고 응답을 재가공 없이 그대로 돌려준다(camelCase 변환 없음 — 얇은 미러)', async () => {
+    const raw = {
+      draft_id: 'draft-1', publication_status: 'published', permalink: 'https://x/p',
+      external_id: 'ext-1', failure_kind: null, command_status: 'completed',
+    }
+    const { calls, fetchImpl } = meAndEndpointSpy('org-1', (url) => {
+      expect(url).toBe('https://app.sprintable.ai/api/v2/organizations/org-1/channel-posts/drafts/draft-1')
+      return new Response(JSON.stringify(raw), { status: 200 })
+    })
+    const result = await getChannelPostPublication({ draftId: 'draft-1' }, { ...API, fetchImpl })
+    expect(result).toEqual(raw)
+    expect(calls.some((c) => c.method === 'GET')).toBe(true)
+  })
+
+  test('⭐404 — ChannelPostDraftNotFoundError(존재 비노출 관례와 동형, 원문 메시지 보존)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(JSON.stringify({ data: null, error: { message: 'draft를 찾을 수 없습니다: draft-x' }, meta: null }), { status: 404 }),
+    )
+    await expect(getChannelPostPublication({ draftId: 'draft-x' }, { ...API, fetchImpl })).rejects.toBeInstanceOf(ChannelPostDraftNotFoundError)
   })
 })
 

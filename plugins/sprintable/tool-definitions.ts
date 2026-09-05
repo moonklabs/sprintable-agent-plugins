@@ -468,4 +468,102 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    // story #3489([Phase1·플러그인] 고객 에이전트용 발행 도구 셋, 페드루 PO 確定
+    // 2026-09-05, 미르코 그라운딩 ③) — create_channel_post_draft/submit_channel_post_
+    // draft(story #3399)는 이미 있지만 발행 "결과"(permalink·status·failure_kind)를
+    // 읽는 도구가 0개였다. connectors/channel-posts.ts::getChannelPostPublication이
+    // GET .../channel-posts/drafts/{draft_id}(#3403, "권한도 목록과 동일 — 휴먼·
+    // 에이전트 둘 다")를 그대로 미러한다.
+    name: 'get_channel_post_publication',
+    description:
+      'Read the publish result for a channel post draft — publication status, permalink, ' +
+      'external_id, and command failure/retry info if the publish is pending, failed, or ' +
+      'dead-lettered. Read-only, works with an agent API key alone. Returns the backend ' +
+      'response shape as-is (field names unchanged from the REST API).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string', description: 'The draft_id returned by create_channel_post_draft.' },
+      },
+      required: ['draft_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #3489 — site_posts(블로그 원문) 축 신설, 첫째. connectors/site-posts.ts::
+    // createOrUpdateSitePostDraft가 POST .../site-posts/drafts(#3365, "고객 에이전트·
+    // 휴먼 공용")를 부른다. 공개 발행(POST .../site-posts)은 human-only라 이 도구에
+    // 없다 — 에이전트는 초안까지만.
+    name: 'create_site_post_draft',
+    description:
+      'Create or update a blog post (site_post) draft. Calling this again with the same ' +
+      'work_item adds a new version to the same draft; it never publishes. Returns draft_id/' +
+      'version_id/version and any non-blocking content-rule violations from create-time lint. ' +
+      'Submit the version with submit_site_post_draft to send it to the external_publish gate ' +
+      '— only a human can approve and publish it from the Sprintable screen after that.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        work_item: { type: 'string', description: 'Story/task id this draft belongs to.' },
+        title: { type: 'string' },
+        slug: { type: 'string' },
+        lang: { type: 'string', description: 'e.g. "ko".' },
+        summary: { type: 'string' },
+        body_md: { type: 'string', description: 'Markdown body.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional, defaults to [].' },
+        media_manifest: { type: 'array', description: 'Optional, defaults to [].' },
+        campaign_id: { type: 'string', description: 'Optional campaign to attach this post to.' },
+        connection_id: {
+          type: 'string',
+          description: 'Optional external publish destination (a channel_connections row, e.g. ' +
+            'a WordPress connection). Omit to keep the current destination unchanged; pass an ' +
+            'empty string to explicitly reset to the default hosted_site destination.',
+        },
+      },
+      required: ['work_item', 'title', 'slug', 'lang', 'summary', 'body_md'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #3489 — site_posts 축 둘째. connectors/site-posts.ts::submitSitePostDraft
+    // → POST .../site-posts/drafts/{id}/submit(#3365 S2, "에이전트 키도 호출 가능 —
+    // 게이트 생성까지만").
+    name: 'submit_site_post_draft',
+    description:
+      'Submit a site post (blog article) draft version to the external_publish approval Gate. ' +
+      'Defaults to the latest version if version_id is omitted. This does not publish — only a ' +
+      'human can approve and publish it from the Sprintable screen. On failure (content-rule ' +
+      'violation, another draft already holding the Gate for this slug/lang, etc.) the response ' +
+      'is a structured error object (code, message, and detail such as violations[] or ' +
+      'holding_draft_id) rather than a generic failure.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string' },
+        version_id: { type: 'string', description: 'Optional — defaults to the latest version of the draft.' },
+      },
+      required: ['draft_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #3489 — site_posts 축 셋째. connectors/site-posts.ts::getSitePostPublication
+    // → GET .../site-posts/drafts/{id}/publication(#3386/#3476, "조직 멤버(휴먼·
+    // 에이전트 모두) 읽기 가능").
+    name: 'get_site_post_publication',
+    description:
+      'Read the publish result for a site post (blog article) draft — hosted_site publish info, ' +
+      'or (if an external destination like WordPress/webhook was set) the channel publication ' +
+      'status/permalink and command failure/retry info. Read-only, works with an agent API key ' +
+      'alone. Returns the backend response shape as-is.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string' },
+      },
+      required: ['draft_id'],
+      additionalProperties: false,
+    },
+  },
 ]
