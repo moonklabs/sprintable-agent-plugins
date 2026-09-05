@@ -125,7 +125,31 @@ export class ChannelPostDraftNotFoundError extends ChannelPostApiError {
   }
 }
 
-interface ParsedErrorDetail {
+/**
+ * story #3471(BE, 2026-09-05)이 channel_post·site_post 제출 엔드포인트 둘 다에 심은
+ * 422 CONTENT_RULE_VIOLATION — shape이 두 도메인에서 완전히 동일해(`rules_version`·
+ * `violations[]`, 각 항목에 `settings_path` 포함) 여기 한 곳에 두고 site-posts.ts가
+ * import한다. `ChannelPostApiError`가 아니라 `Error`를 직접 상속 — "ChannelPost"라는
+ * 이름의 클래스를 site_post 쪽 코드가 던지면 그 자체로 오분류처럼 읽힌다(§AC2 정신,
+ * `tool-error.ts`의 판별은 `instanceof`가 아니라 `code: string` duck-typing이라 상속
+ * 계보와 무관하게 동작한다).
+ */
+export class ContentRuleViolationError extends Error {
+  public readonly code = 'CONTENT_RULE_VIOLATION'
+
+  constructor(
+    message: string,
+    public readonly httpStatus: number,
+    public readonly rulesVersion: number | undefined,
+    public readonly violations: unknown[],
+    public readonly detail?: unknown,
+  ) {
+    super(message)
+    this.name = 'ContentRuleViolationError'
+  }
+}
+
+export interface ParsedErrorDetail {
   code?: string
   message?: string
   /** 서버 detail이 객체였으면 그 원문 그대로(가공 0). 평문 문자열이었으면 undefined —
@@ -133,7 +157,7 @@ interface ParsedErrorDetail {
   detail?: Record<string, unknown>
 }
 
-async function parseErrorDetail(res: Response): Promise<ParsedErrorDetail> {
+export async function parseErrorDetail(res: Response): Promise<ParsedErrorDetail> {
   try {
     const body = (await res.json()) as { error?: unknown; detail?: unknown }
     // story #3410 — BE 전역 핸들러(backend/app/main.py::http_exception_handler)가 이 앱이
@@ -306,6 +330,21 @@ export async function submitChannelPostDraft(
     }
     throw new ChannelPostApiError(message ?? `HTTP 409`, code, 409, detail)
   }
+  // story #3489 보정(발견 — 이 함수의 기존 범위 밖 결함, 페드루 승인 하 포함) — BE
+  // #3471이 CONTENT_RULE_VIOLATION(422, rules_version+violations[])을 이 엔드포인트에
+  // 이미 심었는데(backend/app/routers/channel_posts.py::submit_channel_post_draft_
+  // endpoint) 이 함수는 422 분기가 아예 없어 `!res.ok` 제네릭 폴백으로 떨어져
+  // violations[]가 전부 사라지고 있었다 — site_post 쪽에 같은 코드를 새로 쓰는 김에
+  // 여기도 맞춘다(같은 원인·같은 처방, 별도 스토리로 미루면 같은 버그를 두 번 고치는 셈).
+  if (res.status === 422) {
+    const { code, message, detail } = await parseErrorDetail(res)
+    if (code === 'CONTENT_RULE_VIOLATION') {
+      const rulesVersion = typeof detail?.rules_version === 'number' ? (detail.rules_version as number) : undefined
+      const violations = Array.isArray(detail?.violations) ? (detail.violations as unknown[]) : []
+      throw new ContentRuleViolationError(message ?? 'content rule violation', 422, rulesVersion, violations, detail)
+    }
+    throw new ChannelPostApiError(message ?? `HTTP 422`, code, 422, detail)
+  }
   if (!res.ok) throw new ChannelPostApiError(`channel post draft submit failed: ${res.status}`, undefined, res.status)
 
   const body = (await res.json()) as { gate_id: string; version_id: string; content_sha256: string; status: string }
@@ -337,4 +376,36 @@ export async function listAgentVisibleChannelConnections(
   if (!res.ok) throw new ChannelPostApiError(`channel connections list failed: ${res.status}`, undefined, res.status)
   const body = (await res.json()) as { id: string; channel: string; account_label: string | null; status: string }[]
   return body.map((r) => ({ id: r.id, channel: r.channel, accountLabel: r.account_label, status: r.status }))
+}
+
+/**
+ * story #3489([Phase1·플러그인] 고객 에이전트용 발행 도구 셋, 페드루 PO 確定
+ * 2026-09-05) — GET /organizations/{org}/channel-posts/drafts/{draft_id}(#3403,
+ * backend/app/routers/channel_posts.py:700-703, "권한도 목록과 동일(휴먼·에이전트
+ * 둘 다)"). 미르코 그라운딩 ③이 지목한 갭 — 초안/상신 도구는 이미 있었지만(story
+ * #3399) 발행 "결과"(permalink·status·failure_kind)를 읽는 도구가 0개였다.
+ *
+ * PO 確定 — 이 함수는 응답을 재가공하지 않고 그대로 돌려준다(camelCase 변환 없음,
+ * `ChannelPostDraftListItem`이 30개가 넘는 필드를 가져 exhaustive 재타이핑은 그
+ * 자체로 드리프트 위험이 더 크다 — BE가 필드를 추가해도 이 함수는 손댈 것이
+ * 없다). "얇은 미러"라는 확定의 정신에 이 형태가 create/submit의 camelCase 변환
+ * 관례보다 더 가깝다 — 읽기 전용이라 request body 드롭 위험(확定②가 원래 우려한
+ * 것)도 없다.
+ */
+export async function getChannelPostPublication(
+  params: { draftId: string },
+  api: ChannelPostsClientConfig,
+): Promise<Record<string, unknown>> {
+  const orgId = await resolveOrgId(api)
+  const fetchImpl = api.fetchImpl ?? fetch
+  const res = await fetchImpl(
+    `${apiBase(api.apiUrl)}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}`,
+    { headers: authHeaders(api.apiKey) },
+  )
+  if (res.status === 404) {
+    const { message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
+  }
+  if (!res.ok) throw new ChannelPostApiError(`channel post publication read failed: ${res.status}`, undefined, res.status)
+  return (await res.json()) as Record<string, unknown>
 }

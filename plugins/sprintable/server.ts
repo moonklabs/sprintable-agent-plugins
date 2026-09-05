@@ -38,12 +38,26 @@ import {
   createOrUpdateChannelPostDraft,
   submitChannelPostDraft,
   listAgentVisibleChannelConnections,
+  getChannelPostPublication,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
   ChannelPostGateAlreadyHeldError,
   ChannelPostDraftNotFoundError,
+  ContentRuleViolationError,
 } from './connectors/channel-posts'
+import {
+  createOrUpdateSitePostDraft,
+  submitSitePostDraft,
+  getSitePostPublication,
+  SitePostConnectionNotFoundError,
+  SitePostCampaignNotFoundError,
+  SitePostDestinationKindMismatchError,
+  SitePostMediaNotSupportedError,
+  SitePostDraftNotFoundError,
+  SitePostApproverRoleMissingError,
+  SitePostGateAlreadyHeldError,
+} from './connectors/site-posts'
 import { toWireDescriptor, type ConnectorDescriptor } from './connectors/connector-schema'
 import { THREADS_CONNECTOR_DESCRIPTOR } from './connectors/threads.schema'
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
@@ -395,6 +409,76 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       case 'list_channel_connections': {
         const result = await listAgentVisibleChannelConnections({ apiUrl: API_URL, apiKey: API_KEY })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+      }
+      case 'get_channel_post_publication': {
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const result = await getChannelPostPublication({ draftId }, { apiUrl: API_URL, apiKey: API_KEY })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+      }
+      case 'create_site_post_draft': {
+        const workItem = String(args.work_item ?? '')
+        if (!workItem) throw new Error('work_item is required')
+        const title = String(args.title ?? '')
+        const slug = String(args.slug ?? '')
+        const lang = String(args.lang ?? '')
+        const summary = String(args.summary ?? '')
+        const bodyMd = String(args.body_md ?? '')
+        const tags = Array.isArray(args.tags) ? args.tags.map(String) : undefined
+        const mediaManifest = Array.isArray(args.media_manifest) ? args.media_manifest : undefined
+        const campaignId = args.campaign_id ? String(args.campaign_id) : undefined
+        // 도구 스키마는 connection_id를 string으로만 선언한다(JSON Schema에 "string
+        // 또는 명시 null" 타입이 없다) — 빈 문자열을 "명시 해제"(서버 body엔 null로
+        // 전달)로, 키 생략을 캐리포워드(undefined, 서버 body에 키 자체 없음)로 삼는다.
+        const connectionId = args.connection_id === '' ? null : args.connection_id ? String(args.connection_id) : undefined
+        try {
+          const result = await createOrUpdateSitePostDraft(
+            { workItemId: workItem, title, slug, lang, summary, bodyMd, tags, mediaManifest, campaignId, connectionId },
+            { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('site_post_draft_saved', { work_item: workItem, draft_id: result.draftId, version: result.version })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ContentRuleViolationError) {
+            logEvent('site_post_draft_content_rule_violation', { work_item: workItem, rules_version: err.rulesVersion })
+          } else if (err instanceof SitePostConnectionNotFoundError) {
+            logEvent('site_post_draft_connection_not_found', { work_item: workItem })
+          } else if (err instanceof SitePostCampaignNotFoundError) {
+            logEvent('site_post_draft_campaign_not_found', { work_item: workItem, campaign_id: campaignId })
+          } else if (err instanceof SitePostDestinationKindMismatchError) {
+            logEvent('site_post_draft_destination_kind_mismatch', { work_item: workItem })
+          } else if (err instanceof SitePostMediaNotSupportedError) {
+            logEvent('site_post_draft_media_not_supported', { work_item: workItem })
+          }
+          throw err
+        }
+      }
+      case 'submit_site_post_draft': {
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const versionId = args.version_id ? String(args.version_id) : undefined
+        try {
+          const result = await submitSitePostDraft({ draftId, versionId }, { apiUrl: API_URL, apiKey: API_KEY })
+          logEvent('site_post_draft_submitted', { draft_id: draftId, gate_id: result.gateId, status: result.status })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof SitePostDraftNotFoundError) {
+            logEvent('site_post_draft_submit_not_found', { draft_id: draftId })
+          } else if (err instanceof SitePostApproverRoleMissingError) {
+            logEvent('site_post_draft_submit_approver_role_missing', { draft_id: draftId })
+          } else if (err instanceof SitePostGateAlreadyHeldError) {
+            logEvent('site_post_draft_submit_gate_already_held', { draft_id: draftId, holding_draft_id: err.holdingDraftId })
+          } else if (err instanceof ContentRuleViolationError) {
+            logEvent('site_post_draft_submit_content_rule_violation', { draft_id: draftId, rules_version: err.rulesVersion })
+          }
+          throw err
+        }
+      }
+      case 'get_site_post_publication': {
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const result = await getSitePostPublication({ draftId }, { apiUrl: API_URL, apiKey: API_KEY })
         return { content: [{ type: 'text', text: JSON.stringify(result) }] }
       }
       case 'publish_instagram_post': {
