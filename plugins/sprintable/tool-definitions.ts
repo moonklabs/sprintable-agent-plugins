@@ -12,6 +12,33 @@
  * 실제로 여기 존재하는지 대조한다. (story #3399 — publish_threads_post 삭제로
  * THREADS_CONNECTOR_DESCRIPTOR 파생은 이제 없다. 대체 도구 create_channel_post_draft는
  * 채널 무관 범용 text 필드라 기계적 파생 대상이 아니다.)
+ *
+ * story #3495(페드루 PO 確定 2026-09-05, 미르코 그라운딩 ③) — channel_post/site_post
+ * 발행 도구 6개(create_channel_post_draft·submit_channel_post_draft·
+ * get_channel_post_publication·create_site_post_draft·submit_site_post_draft·
+ * get_site_post_publication)는 각자 description에 다음 단계를 링크해 두지만, 전체
+ * 흐름을 한눈에 보려면 `skills/publish-content/SKILL.md`가 정본이다 — 여기 요약이
+ * 스킬과 어긋나면 **스킬이 이긴다**(이 요약은 빠른 참조일 뿐, 재작성 시 스킬을 먼저
+ * 고치고 여기를 그대로 따라오게 한다):
+ *
+ *   1. create_*_draft(초안 생성/수정, work_item당 버전 누적)
+ *   2. violations[]가 있으면(콘텐츠 규칙 위반, {code,field,value,hint_key,settings_path}
+ *      — message 필드 없음) 필드를 고쳐 create_*_draft 재호출
+ *   3. submit_*_draft(external_publish 게이트로 상신 — 발행 아님)
+ *   4. 휴먼 승인 대기(폴링 도구 없음 — 기다린다, 조르지 않는다)
+ *   5. 승인 뒤 get_*_publication으로 결과 읽기 — 누가/언제 발행하는지는 갈린다
+ *      (gate_service.py::_maybe_create_scheduled_publication_command 실측): site_post
+ *      (외부 목적지)·scheduled_at 있는 channel_post=승인 즉시/그 시각에 워커가 커맨드를
+ *      만들어 발행 · **scheduled_at 없는 channel_post·hosted_site인 site_post(신규
+ *      draft에서 connection_id 생략 또는 명시 null — 기존 draft의 새 버전에서 생략은
+ *      대신 이전 목적지를 캐리포워드한다, routers/site_posts.py L92)=승인만으론 커맨드
+ *      자체가 안 생긴다** — 휴먼이 화면에서 별도로 「발행」을 눌러야 한다(channel_post는
+ *      도구 자체가 없음·site_post는 POST .../drafts/{draft_id}/publish가 에이전트 호출
+ *      시 403 SITE_POST_PUBLISH_HUMAN_ONLY). command가 null이면 그게 정상 상태다
+ *      ("승인 済, 휴먼 발행 클릭 대기"로 보고 — 막힌 게 아니다).
+ *   6. command_status 분기: pending/in_progress/failed=조치 없음(워커 자동 재시도) ·
+ *      dead_letter=휴먼에게 command_id와 함께 보고(에이전트 재시도 도구는 이 슬라이스
+ *      범위 밖 — 재시도는 휴먼 화면/엔드포인트 몫).
  */
 import { STIBEE_CONNECTOR_DESCRIPTOR } from './connectors/stibee.schema'
 import { INSTAGRAM_CONNECTOR_DESCRIPTOR } from './connectors/instagram.schema'
@@ -189,7 +216,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'work_item and connection_id adds a new version to the same draft; it never publishes. Returns ' +
       'draft_id/version_id/version/tagged_link_preview. Submit the version with ' +
       'submit_channel_post_draft to send it to the external_publish gate — only a human can approve ' +
-      'and publish it from the Sprintable screen after that (story #3399, server API #3374).',
+      'it from the Sprintable screen; publishing then follows the destination rules (see the ' +
+      'publish-content skill) (story #3399, server API #3374).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -216,8 +244,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: 'submit_channel_post_draft',
     description:
       'Submit a channel post draft version to the external_publish gate for approval. Defaults to ' +
-      'the latest version if version_id is omitted. This does not publish — only a human can approve ' +
-      'and publish it from the Sprintable screen (story #3399, server API #3374).',
+      'the latest version if version_id is omitted. This does not publish — only a human can ' +
+      'approve it from the Sprintable screen (story #3399, server API #3374); publishing then ' +
+      'follows the destination rules (see the publish-content skill). After a human ' +
+      'approves: if this was scheduled, a worker publishes it at that time and you can call ' +
+      'get_channel_post_publication to check progress; if it was not scheduled (immediate), a ' +
+      'human still has to click Publish separately on the Sprintable screen (no tool for that) — ' +
+      'get_channel_post_publication showing no command yet is expected in that case, not a stall.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -480,7 +513,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Read the publish result for a channel post draft — publication status, permalink, ' +
       'external_id, and command failure/retry info if the publish is pending, failed, or ' +
       'dead-lettered. Read-only, works with an agent API key alone. Returns the backend ' +
-      'response shape as-is (field names unchanged from the REST API).',
+      'response shape as-is (field names unchanged from the REST API). A null/absent command ' +
+      'right after human approval is expected for an immediate (unscheduled) post — a human still ' +
+      'has to click Publish separately, this tool does not trigger it. Once a command exists: ' +
+      'pending/in_progress/failed = no action, the worker retries automatically; dead_letter = ' +
+      'report it to a human with the command_id, retrying it is a human action (see the ' +
+      'publish-content skill for the full flow).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -501,7 +539,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'work_item adds a new version to the same draft; it never publishes. Returns draft_id/' +
       'version_id/version and any non-blocking content-rule violations from create-time lint. ' +
       'Submit the version with submit_site_post_draft to send it to the external_publish gate ' +
-      '— only a human can approve and publish it from the Sprintable screen after that.',
+      '— only a human can approve it from the Sprintable screen; publishing then follows the ' +
+      'destination rules (see the publish-content skill).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -532,11 +571,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: 'submit_site_post_draft',
     description:
       'Submit a site post (blog article) draft version to the external_publish approval Gate. ' +
-      'Defaults to the latest version if version_id is omitted. This does not publish — only a ' +
-      'human can approve and publish it from the Sprintable screen. On failure (content-rule ' +
-      'violation, another draft already holding the Gate for this slug/lang, etc.) the response ' +
-      'is a structured error object (code, message, and detail such as violations[] or ' +
-      'holding_draft_id) rather than a generic failure.',
+      'Defaults to the latest version if version_id is omitted. This does not publish. On failure ' +
+      '(content-rule violation, another draft already holding the Gate for this slug/lang, etc.) ' +
+      'the response is a structured error object (code, message, and detail such as violations[] ' +
+      'or holding_draft_id) rather than a generic failure. Only a human can approve it from the ' +
+      'Sprintable screen; what publishes it afterwards depends on the destination: a ' +
+      'connection_id (external destination) means a worker publishes it automatically; ' +
+      'hosted_site (connection_id omitted on a brand-new draft, or explicitly set to null) ' +
+      'means a human still has to click Publish separately (agent keys get 403 on that ' +
+      'endpoint) — omitting connection_id on a new version of an *existing* draft instead ' +
+      'carries forward whatever destination that draft already had. Either way, call ' +
+      'get_site_post_publication to read the result — do not publish it yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -556,7 +601,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Read the publish result for a site post (blog article) draft — hosted_site publish info, ' +
       'or (if an external destination like WordPress/webhook was set) the channel publication ' +
       'status/permalink and command failure/retry info. Read-only, works with an agent API key ' +
-      'alone. Returns the backend response shape as-is.',
+      'alone. Returns the backend response shape as-is. A null/absent command right after human ' +
+      'approval is expected for a hosted_site draft (its resolved destination, not just what ' +
+      "this draft's latest submit call happened to pass) — a human still has to click Publish " +
+      'separately, this tool does not trigger it. Once a command exists: ' +
+      'pending/in_progress/failed = no action, the worker retries automatically; dead_letter = ' +
+      'report it to a human with the command_id, retrying it is a human action (see the ' +
+      'publish-content skill for the full flow).',
     inputSchema: {
       type: 'object',
       properties: {
