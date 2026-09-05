@@ -55,17 +55,23 @@ and result → failure action).
      show a null/absent `command` until a human does that. **This is the expected,
      normal state — not a stuck draft.** Report it as "approved, waiting for a human to
      click Publish", not as a failure or a stall on your end.
-   - **site_post with no `connection_id` (hosted_site — the default when you omit it)**
-     — same shape as the immediate channel_post case above: no command on approval, a
-     human clicks Publish on the Sprintable screen (`POST .../site-posts/drafts/
-     {draft_id}/publish`; an agent key gets 403 `SITE_POST_PUBLISH_HUMAN_ONLY` if it
-     tries). `get_site_post_publication` shows the hosted_site fields only once that
-     happens — until then, "approved, waiting for a human to click Publish" is the
-     normal state, not a stall. (This `/drafts/{draft_id}/publish` endpoint is *inside*
-     this flow — it's the hosted_site publish click for a draft you made with
-     `create_site_post_draft`. It's a different thing from the legacy standalone
-     `POST .../site-posts` endpoint mentioned under Human-only steps below, which isn't
-     part of this draft/submit/approve flow at all.)
+   - **site_post resolving to hosted_site** — same shape as the immediate channel_post
+     case above: no command on approval, a human clicks Publish on the Sprintable screen
+     (`POST .../site-posts/drafts/{draft_id}/publish`; an agent key gets 403
+     `SITE_POST_PUBLISH_HUMAN_ONLY` if it tries). Whether a draft resolves to hosted_site
+     depends on `connection_id` and whether this is a brand-new draft or a new version of
+     an existing one (`routers/site_posts.py` L92 — the field is a carry-forward
+     sentinel, same idea as `campaign_id`): omit it on a **brand-new** draft → hosted_site;
+     set it explicitly to `null` → hosted_site, on either a new or existing draft; omit it
+     on a **new version of an existing draft** → keeps whatever destination that draft
+     already had (not hosted_site, unless that's what it already was). `get_site_post_
+     publication` shows the hosted_site fields only once a human clicks Publish — until
+     then, "approved, waiting for a human to click Publish" is the normal state, not a
+     stall. (This `/drafts/{draft_id}/publish` endpoint is *inside* this flow — it's the
+     hosted_site publish click for a draft you made with `create_site_post_draft`. It's a
+     different thing from the legacy standalone `POST .../site-posts` endpoint mentioned
+     under Human-only steps below, which isn't part of this draft/submit/approve flow at
+     all.)
    In every case, there is no "publish" tool for *you* to call — either a worker or a
    human does it, per the branches above. The response carries `command_status` /
    `publication_status` and, once published, `permalink`/`external_id`.
@@ -84,17 +90,18 @@ and result → failure action).
 | `failed` (with `attempt_count` still climbing) | A single attempt failed; the worker backs off and retries automatically (story #3414) | Nothing — this is expected during the retry window, not an error to escalate |
 | `dead_letter` | The worker gave up retrying | **Report this to a human, with the `command_id`.** Retrying a `dead_letter` command is a human action from the Sprintable screen (or its `POST .../publication-commands/{id}/retry` endpoint) — there is no agent tool for it in this slice. Don't call `submit_*_draft` again as a workaround; that creates a new version/Gate cycle, it does not retry the stuck command. |
 
-Submit-time errors (`submit_*_draft` itself returning a structured error, before any of
-the above ever starts) are a separate axis — see the table below for the common ones,
-and `/sprintable:configure`'s **Reading tool error responses** section for the general
-JSON error shape (`code`/`message`/`http_status`/`detail`) every Sprintable tool shares.
+Create-time and submit-time errors (`create_*_draft`/`submit_*_draft` themselves
+returning a structured error, before step 4's approval-wait even starts) are a separate
+axis from the command-status table above — see below for the common ones, and
+`/sprintable:configure`'s **Reading tool error responses** section for the general JSON
+error shape (`code`/`message`/`http_status`/`detail`) every Sprintable tool shares.
 
-| `code` | HTTP | Meaning | What you do |
-|---|---|---|
-| `CONTENT_RULE_VIOLATION` | 422 | The org's content rules reject this version at submit time (story #3471) — `detail.violations[]`, same shape as the create-time array | Go back to step 2: fix the field(s) named in `violations[]`, re-save with `create_*_draft`, submit again |
-| `CHANNEL_POST_GATE_ALREADY_HELD` / `SITE_POST_GATE_ALREADY_HELD` | 409 | Another draft on the same work item (or the same site_post slug/lang) already holds the approval Gate | `detail.holding_draft_id` names it — surface that id to a human as-is, don't guess which draft it is or resolve it yourself; it won't resolve by retrying |
-| `CHANNEL_POST_APPROVER_ROLE_MISSING` / `SITE_POST_APPROVER_ROLE_MISSING` | 409 | The organization has no default approval role configured | Escalate to an organization owner/admin — not something your key can fix |
-| `SITE_POST_CONNECTION_NOT_FOUND` / `SITE_POST_DESTINATION_KIND_MISMATCH` / `MEDIA_NOT_SUPPORTED_PHASE0` / `CAMPAIGN_NOT_FOUND` | 422 | site_post create-time input problems (bad `connection_id`, mismatched destination, unsupported media, unknown `campaign_id`) | Fix the offending field named by the code and re-create |
+| `code` | HTTP | When | Meaning | What you do |
+|---|---|---|---|---|
+| `SITE_POST_CONNECTION_NOT_FOUND` / `SITE_POST_DESTINATION_KIND_MISMATCH` / `MEDIA_NOT_SUPPORTED_PHASE0` / `CAMPAIGN_NOT_FOUND` | 422 | `create_site_post_draft` (step 1) | site_post input problems (bad `connection_id`, mismatched destination, unsupported media, unknown `campaign_id`) | Fix the offending field named by the code and re-create |
+| `CONTENT_RULE_VIOLATION` | 422 | `submit_*_draft` (step 3) | The org's content rules reject this version at submit time (story #3471) — `detail.violations[]`, same shape as the create-time array | Go back to step 2: fix the field(s) named in `violations[]`, re-save with `create_*_draft`, submit again |
+| `CHANNEL_POST_GATE_ALREADY_HELD` / `SITE_POST_GATE_ALREADY_HELD` | 409 | `submit_*_draft` (step 3) | Another draft on the same work item (or the same site_post slug/lang) already holds the approval Gate | `detail.holding_draft_id` names it — surface that id to a human as-is, don't guess which draft it is or resolve it yourself; it won't resolve by retrying |
+| `CHANNEL_POST_APPROVER_ROLE_MISSING` / `SITE_POST_APPROVER_ROLE_MISSING` | 409 | `submit_*_draft` (step 3) | The organization has no default approval role configured | Escalate to an organization owner/admin — not something your key can fix |
 
 For `create_channel_post_draft`'s own codes (`CHANNEL_CONNECTION_NOT_ACTIVE`,
 `CHANNEL_TEXT_TOO_LONG`), see `/sprintable:configure-threads` — this skill doesn't
