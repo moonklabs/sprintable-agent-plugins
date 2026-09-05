@@ -216,7 +216,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'work_item and connection_id adds a new version to the same draft; it never publishes. Returns ' +
       'draft_id/version_id/version/tagged_link_preview. Submit the version with ' +
       'submit_channel_post_draft to send it to the external_publish gate — only a human can approve ' +
-      'and publish it from the Sprintable screen after that (story #3399, server API #3374).',
+      'it from the Sprintable screen; publishing then follows the destination rules (see the ' +
+      'publish-content skill) (story #3399, server API #3374).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -243,8 +244,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: 'submit_channel_post_draft',
     description:
       'Submit a channel post draft version to the external_publish gate for approval. Defaults to ' +
-      'the latest version if version_id is omitted. This does not publish — only a human can approve ' +
-      'and publish it from the Sprintable screen (story #3399, server API #3374). After a human ' +
+      'the latest version if version_id is omitted. This does not publish — only a human can ' +
+      'approve it from the Sprintable screen (story #3399, server API #3374); publishing then ' +
+      'follows the destination rules (see the publish-content skill). After a human ' +
       'approves: if this was scheduled, a worker publishes it at that time and you can call ' +
       'get_channel_post_publication to check progress; if it was not scheduled (immediate), a ' +
       'human still has to click Publish separately on the Sprintable screen (no tool for that) — ' +
@@ -537,7 +539,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'work_item adds a new version to the same draft; it never publishes. Returns draft_id/' +
       'version_id/version and any non-blocking content-rule violations from create-time lint. ' +
       'Submit the version with submit_site_post_draft to send it to the external_publish gate ' +
-      '— only a human can approve and publish it from the Sprintable screen after that.',
+      '— only a human can approve it from the Sprintable screen; publishing then follows the ' +
+      'destination rules (see the publish-content skill).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -568,11 +571,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     name: 'submit_site_post_draft',
     description:
       'Submit a site post (blog article) draft version to the external_publish approval Gate. ' +
-      'Defaults to the latest version if version_id is omitted. This does not publish — only a ' +
-      'human can approve and publish it from the Sprintable screen. On failure (content-rule ' +
-      'violation, another draft already holding the Gate for this slug/lang, etc.) the response ' +
-      'is a structured error object (code, message, and detail such as violations[] or ' +
-      'holding_draft_id) rather than a generic failure. Only a human can approve it from the ' +
+      'Defaults to the latest version if version_id is omitted. This does not publish. On failure ' +
+      '(content-rule violation, another draft already holding the Gate for this slug/lang, etc.) ' +
+      'the response is a structured error object (code, message, and detail such as violations[] ' +
+      'or holding_draft_id) rather than a generic failure. Only a human can approve it from the ' +
       'Sprintable screen; what publishes it afterwards depends on the destination: a ' +
       'connection_id (external destination) means a worker publishes it automatically; ' +
       'hosted_site (connection_id omitted on a brand-new draft, or explicitly set to null) ' +
