@@ -55,13 +55,24 @@ and result → failure action).
      show a null/absent `command` until a human does that. **This is the expected,
      normal state — not a stuck draft.** Report it as "approved, waiting for a human to
      click Publish", not as a failure or a stall on your end.
+   - **site_post with no `connection_id` (hosted_site — the default when you omit it)**
+     — same shape as the immediate channel_post case above: no command on approval, a
+     human clicks Publish on the Sprintable screen (`POST .../site-posts/drafts/
+     {draft_id}/publish`; an agent key gets 403 `SITE_POST_PUBLISH_HUMAN_ONLY` if it
+     tries). `get_site_post_publication` shows the hosted_site fields only once that
+     happens — until then, "approved, waiting for a human to click Publish" is the
+     normal state, not a stall. (This `/drafts/{draft_id}/publish` endpoint is *inside*
+     this flow — it's the hosted_site publish click for a draft you made with
+     `create_site_post_draft`. It's a different thing from the legacy standalone
+     `POST .../site-posts` endpoint mentioned under Human-only steps below, which isn't
+     part of this draft/submit/approve flow at all.)
    In every case, there is no "publish" tool for *you* to call — either a worker or a
    human does it, per the branches above. The response carries `command_status` /
    `publication_status` and, once published, `permalink`/`external_id`.
 6. **Branch on the result** — see the table below. Most `command_status` values need no
    action; only `dead_letter` does, and even then the action is "tell a human", not
    "retry it yourself." A null/absent `command` after approval is its own case — see
-   step 5's third bullet, it isn't one of the table's rows.
+   step 5's third and fourth bullets, it isn't one of the table's rows.
 
 ## Failure / status branch table
 
@@ -101,6 +112,8 @@ repeat those.
   "Publish" on the Sprintable screen after approving — see step 5's third bullet. You
   never call anything to make any of these happen.
 - **Retrying a `dead_letter` command** — see the table above.
-- **Site_post's own public "publish" endpoint** (`POST .../site-posts`, the *hosted_site*
-  publish path, separate from the create/submit/get flow above) is human-only server-side
-  (`SITE_POST_PUBLISH_HUMAN_ONLY`) — it isn't part of this flow at all.
+- **The legacy standalone `POST .../site-posts` endpoint** (not `.../drafts/{draft_id}/
+  publish`, which *is* part of this flow — see step 5's fourth bullet) is a different,
+  older publish path entirely, outside the create/submit/get flow above. It's human-only
+  server-side too, but don't confuse the two: the draft-flow publish click a human makes
+  for your hosted_site draft is a normal, expected part of this flow's last mile.

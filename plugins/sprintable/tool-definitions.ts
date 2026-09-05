@@ -29,9 +29,12 @@
  *   5. 승인 뒤 get_*_publication으로 결과 읽기 — 누가/언제 발행하는지는 갈린다
  *      (gate_service.py::_maybe_create_scheduled_publication_command 실측): site_post
  *      (외부 목적지)·scheduled_at 있는 channel_post=승인 즉시/그 시각에 워커가 커맨드를
- *      만들어 발행 · **scheduled_at 없는 channel_post=승인만으론 커맨드 자체가 안 생긴다
- *      — 휴먼이 화면에서 별도로 「발행」을 눌러야 한다(도구 없음). command가 null이면
- *      그게 정상 상태다("승인 済, 휴먼 발행 클릭 대기"로 보고 — 막힌 게 아니다).
+ *      만들어 발행 · **scheduled_at 없는 channel_post·connection_id 없는 site_post
+ *      (hosted_site, 생략 시 기본값)=승인만으론 커맨드 자체가 안 생긴다** — 휴먼이
+ *      화면에서 별도로 「발행」을 눌러야 한다(channel_post는 도구 자체가 없음·site_post는
+ *      POST .../drafts/{draft_id}/publish가 에이전트 호출 시 403
+ *      SITE_POST_PUBLISH_HUMAN_ONLY). command가 null이면 그게 정상 상태다("승인 済,
+ *      휴먼 발행 클릭 대기"로 보고 — 막힌 게 아니다).
  *   6. command_status 분기: pending/in_progress/failed=조치 없음(워커 자동 재시도) ·
  *      dead_letter=휴먼에게 command_id와 함께 보고(에이전트 재시도 도구는 이 슬라이스
  *      범위 밖 — 재시도는 휴먼 화면/엔드포인트 몫).
@@ -568,8 +571,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'human can approve and publish it from the Sprintable screen. On failure (content-rule ' +
       'violation, another draft already holding the Gate for this slug/lang, etc.) the response ' +
       'is a structured error object (code, message, and detail such as violations[] or ' +
-      'holding_draft_id) rather than a generic failure. After a human approves, call ' +
-      'get_site_post_publication to read the result — do not publish it yourself.',
+      'holding_draft_id) rather than a generic failure. After a human approves: if you set a ' +
+      'connection_id, a worker publishes it automatically; if you omitted it (hosted_site, the ' +
+      'default), a human still has to click Publish separately on the Sprintable screen (agent ' +
+      'keys get 403 on that endpoint). Either way, call get_site_post_publication to read the ' +
+      'result — do not publish it yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -589,10 +595,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Read the publish result for a site post (blog article) draft — hosted_site publish info, ' +
       'or (if an external destination like WordPress/webhook was set) the channel publication ' +
       'status/permalink and command failure/retry info. Read-only, works with an agent API key ' +
-      'alone. Returns the backend response shape as-is. command_status pending/in_progress/' +
-      'failed = no action, the worker retries automatically; command_status dead_letter = report ' +
-      'it to a human with the command_id, retrying it is a human action (see the publish-content ' +
-      'skill for the full flow).',
+      'alone. Returns the backend response shape as-is. A null/absent command right after human ' +
+      'approval is expected for a hosted_site draft (no connection_id set) — a human still has to ' +
+      'click Publish separately, this tool does not trigger it. Once a command exists: ' +
+      'pending/in_progress/failed = no action, the worker retries automatically; dead_letter = ' +
+      'report it to a human with the command_id, retrying it is a human action (see the ' +
+      'publish-content skill for the full flow).',
     inputSchema: {
       type: 'object',
       properties: {
