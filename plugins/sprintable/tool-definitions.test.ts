@@ -31,6 +31,12 @@ describe('create_channel_post_draft / submit_channel_post_draft / list_channel_c
     expect(tool.inputSchema.properties.text).toEqual({ type: 'string' })
   })
 
+  test('story #3645 — create_channel_post_draft에 hook_key 선택 필드가 있다(필수 아님)', () => {
+    const tool = toolByName('create_channel_post_draft')
+    expect(tool.inputSchema.properties.hook_key).toEqual({ type: 'string', description: expect.any(String) })
+    expect(tool.inputSchema.required).not.toContain('hook_key')
+  })
+
   test('submit_channel_post_draft는 draft_id만 필수, version_id는 선택', () => {
     const tool = toolByName('submit_channel_post_draft')
     expect(tool.inputSchema.required).toEqual(['draft_id'])

@@ -197,6 +197,10 @@ export interface CreateOrUpdateChannelPostDraftParams {
   connectionId: string
   text: string
   linkUrl?: string
+  /** story #3645 — 훅(캡션 도입부) A/B 태깅용 분석 라벨. 서버가 형식 검사(≤64자·
+   * [A-Za-z0-9_-], 위반 시 422)를 한다 — 여기서 재검증하지 않는다(서버가 SSOT).
+   * link_url과 동형(캐리포워드 없음, 매 호출이 현재 값). */
+  hookKey?: string
 }
 
 export interface ChannelPostDraftVersionResult {
@@ -207,6 +211,8 @@ export interface ChannelPostDraftVersionResult {
   bodySha256: string
   /** link_url을 줬을 때만 채워진다(없으면 null, 지어내지 않는다). */
   taggedLinkPreview: string | null
+  /** story #3645 — 생략/null=라벨 없음. */
+  hookKey: string | null
 }
 
 /**
@@ -228,6 +234,7 @@ export async function createOrUpdateChannelPostDraft(
       connection_id: params.connectionId,
       text: params.text,
       link_url: params.linkUrl ?? null,
+      hook_key: params.hookKey ?? null,
     }),
   })
 
@@ -259,6 +266,7 @@ export async function createOrUpdateChannelPostDraft(
     author_kind: string
     body_sha256: string
     tagged_link_preview: string | null
+    hook_key: string | null
   }
   return {
     draftId: body.draft_id,
@@ -267,6 +275,7 @@ export async function createOrUpdateChannelPostDraft(
     authorKind: body.author_kind,
     bodySha256: body.body_sha256,
     taggedLinkPreview: body.tagged_link_preview,
+    hookKey: body.hook_key,
   }
 }
 
