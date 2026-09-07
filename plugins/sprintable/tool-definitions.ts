@@ -245,6 +245,34 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    // story #3666(Phase2·마케팅운영, 페드루 PO 確定 2026-09-07) — create_channel_post_draft
+    // 위 draft에 이미지를 첨부. 기존 3단계(upload-url 발급→서명 PUT→confirm) 플로우는
+    // Bash/HTTP 클라이언트가 없는 에이전트가 스스로 못 탄다 — connectors/channel-posts.ts
+    // ::attachChannelPostImage가 base64 원콜로 서버 신규 엔드포인트(#3666 BE PR,
+    // .../assets/import-image)를 부른다. 같은 소재(같은 bytes)를 여러 draft에 첨부해도
+    // 서버가 계산하는 sha256은 항상 같다(3656 소재 그룹 성과 비교의 전제).
+    name: 'attach_channel_post_image',
+    description:
+      'Attach an image to an existing channel post draft (created via create_channel_post_draft) in ' +
+      'one call — pass the raw image bytes as base64, no upload-URL/PUT/confirm dance needed. The ' +
+      'server auto-converts to fit the channel spec (width/format/size) when needed; it only rejects ' +
+      'what it cannot fix (aspect ratio, undecodable, animated). Calling this again on the same draft ' +
+      'adds another image (carousel channels) or replaces the cover (video drafts) and creates a new ' +
+      'version, same as editing text. Attaching the exact same image bytes to different drafts always ' +
+      'produces the same content hash server-side — useful when comparing performance across posts ' +
+      'that share the same visual asset but different hooks (story #3666).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string', description: 'The draft to attach the image to (from create_channel_post_draft).' },
+        image_base64: { type: 'string', description: 'Base64-encoded raw image bytes (no data: URI prefix).' },
+        content_type: { type: 'string', description: 'MIME type of the image, e.g. "image/png" or "image/jpeg".' },
+      },
+      required: ['draft_id', 'image_base64', 'content_type'],
+      additionalProperties: false,
+    },
+  },
+  {
     // story #3399 AC3 — 초안 버전을 external_publish 게이트에 상신. connectors/
     // channel-posts.ts::submitChannelPostDraft가 POST .../channel-posts/drafts/{id}/submit
     // (#3374)를 부른다. 서버 실측(2026-09-03): 에이전트 키도 이 호출 가능(승인·발행만

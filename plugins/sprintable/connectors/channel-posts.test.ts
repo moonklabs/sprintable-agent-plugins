@@ -11,6 +11,7 @@ import {
   submitChannelPostDraft,
   listAgentVisibleChannelConnections,
   getChannelPostPublication,
+  attachChannelPostImage,
   ChannelPostApiError,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
@@ -451,5 +452,91 @@ describe('AC4 — 발행(publish) 경로가 이 커넥터에 존재하지 않는
     const mod = await import('./channel-posts')
     const exportNames = Object.keys(mod)
     expect(exportNames.some((n) => /publish/i.test(n))).toBe(false)
+  })
+})
+
+describe('attachChannelPostImage (story #3666, server .../assets/import-image)', () => {
+  test('org_id를 resolveOrgId로 얻어 정확한 경로로 base64 POST하고, 서버 응답을 그대로 매핑한다', async () => {
+    const { calls, fetchImpl } = meAndEndpointSpy('org-1', (url, init) => {
+      expect(url).toBe(
+        'https://app.sprintable.ai/api/v2/organizations/org-1/channel-posts/drafts/draft-1/assets/import-image',
+      )
+      expect(init?.method).toBe('POST')
+      const body = JSON.parse(init?.body as string)
+      expect(body).toEqual({ image_base64: 'YmFzZTY0Ym9keQ==', content_type: 'image/png' })
+      return new Response(
+        JSON.stringify({
+          image_id: 'img-1', draft_id: 'draft-1', version_id: 'ver-2', version: 2,
+          original_width: 800, original_height: 600, original_bytes: 12345,
+          final_width: 800, final_height: 600, final_bytes: 12345,
+          was_converted: false, image_url: 'https://storage.googleapis.com/bucket/x.png', position: 0,
+        }),
+        { status: 201 },
+      )
+    })
+
+    const result = await attachChannelPostImage(
+      { draftId: 'draft-1', imageBase64: 'YmFzZTY0Ym9keQ==', contentType: 'image/png' },
+      { ...API, fetchImpl },
+    )
+    expect(result).toEqual({
+      imageId: 'img-1', draftId: 'draft-1', versionId: 'ver-2', version: 2,
+      originalWidth: 800, originalHeight: 600, originalBytes: 12345,
+      finalWidth: 800, finalHeight: 600, finalBytes: 12345,
+      wasConverted: false, imageUrl: 'https://storage.googleapis.com/bucket/x.png', position: 0,
+    })
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/assets/import-image'))).toBe(true)
+  })
+
+  test('⭐404는 ChannelPostDraftNotFoundError로 구별된다(3399/#3374 기존 관례와 동형)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(JSON.stringify({ data: null, error: { code: 'CHANNEL_POST_DRAFT_NOT_FOUND', message: 'draft를 찾을 수 없습니다: draft-x' }, meta: null }), { status: 404 }),
+    )
+    await expect(
+      attachChannelPostImage({ draftId: 'draft-x', imageBase64: 'YQ==', contentType: 'image/png' }, { ...API, fetchImpl }),
+    ).rejects.toBeInstanceOf(ChannelPostDraftNotFoundError)
+  })
+
+  test('AC2(§ 미지 code 임의 낙착 금지) — confirm 전용 코드(예: CHANNEL_IMAGE_UNDECODABLE)는 새 서브클래스를 만들지 않고 기반 클래스로 code/message/detail을 원문 보존한다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ data: null, error: { code: 'CHANNEL_IMAGE_UNDECODABLE', message: '이미지를 해독할 수 없습니다' }, meta: null }),
+        { status: 422 },
+      ),
+    )
+    try {
+      await attachChannelPostImage({ draftId: 'draft-1', imageBase64: 'YQ==', contentType: 'image/png' }, { ...API, fetchImpl })
+      throw new Error('should have thrown')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ChannelPostDraftNotFoundError)
+      const e = err as ChannelPostApiError
+      expect(e.code).toBe('CHANNEL_IMAGE_UNDECODABLE')
+      expect(e.httpStatus).toBe(422)
+      expect(e.message).toBe('이미지를 해독할 수 없습니다')
+    }
+  })
+
+  test('같은 base64 바디를 두 다른 draft_id에 보내도 각각 자기 draft_id 경로로만 POST한다(경로 격리 회귀)', async () => {
+    const urls: string[] = []
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      urls.push(url)
+      if (url.includes('/api/v2/auth/me')) return new Response(JSON.stringify({ org_id: 'org-1' }), { status: 200 })
+      return new Response(
+        JSON.stringify({
+          image_id: 'img-x', draft_id: 'x', version_id: 'v', version: 2,
+          original_width: 1, original_height: 1, original_bytes: 1,
+          final_width: 1, final_height: 1, final_bytes: 1,
+          was_converted: false, image_url: null, position: 0,
+        }),
+        { status: 201 },
+      )
+    }) as unknown as typeof fetch
+
+    await attachChannelPostImage({ draftId: 'draft-a', imageBase64: 'YQ==', contentType: 'image/png' }, { ...API, fetchImpl })
+    await attachChannelPostImage({ draftId: 'draft-b', imageBase64: 'YQ==', contentType: 'image/png' }, { ...API, fetchImpl })
+
+    expect(urls.some((u) => u.includes('/drafts/draft-a/assets/import-image'))).toBe(true)
+    expect(urls.some((u) => u.includes('/drafts/draft-b/assets/import-image'))).toBe(true)
   })
 })
