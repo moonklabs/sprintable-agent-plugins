@@ -362,9 +362,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         if (!connectionId) throw new Error('connection_id is required')
         const text = String(args.text ?? '')
         const linkUrl = args.link_url ? String(args.link_url) : undefined
+        const hookKey = args.hook_key ? String(args.hook_key) : undefined
         try {
           const result = await createOrUpdateChannelPostDraft(
-            { workItemId: workItem, connectionId, text, linkUrl },
+            { workItemId: workItem, connectionId, text, linkUrl, hookKey },
             { apiUrl: API_URL, apiKey: API_KEY },
           )
           logEvent('channel_post_draft_saved', {

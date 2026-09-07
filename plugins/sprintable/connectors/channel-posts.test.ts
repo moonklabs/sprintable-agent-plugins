@@ -41,12 +41,12 @@ describe('createOrUpdateChannelPostDraft (story #3399 AC2, server #3374)', () =>
       expect(init?.method).toBe('POST')
       const body = JSON.parse(init?.body as string)
       expect(body).toEqual({
-        work_item_id: 'wi-1', connection_id: 'conn-1', text: 'hello', link_url: null,
+        work_item_id: 'wi-1', connection_id: 'conn-1', text: 'hello', link_url: null, hook_key: null,
       })
       return new Response(
         JSON.stringify({
           draft_id: 'draft-1', version_id: 'ver-1', version: 1, author_kind: 'agent',
-          body_sha256: 'sha', tagged_link_preview: null,
+          body_sha256: 'sha', tagged_link_preview: null, hook_key: null,
         }),
         { status: 201 },
       )
@@ -58,9 +58,43 @@ describe('createOrUpdateChannelPostDraft (story #3399 AC2, server #3374)', () =>
     )
     expect(result).toEqual({
       draftId: 'draft-1', versionId: 'ver-1', version: 1, authorKind: 'agent',
-      bodySha256: 'sha', taggedLinkPreview: null,
+      bodySha256: 'sha', taggedLinkPreview: null, hookKey: null,
     })
     expect(calls.some((c) => c.url.includes('/auth/me'))).toBe(true)
+  })
+
+  test('story #3645 — hook_key를 주면 body에 실리고, 응답의 hook_key를 그대로 돌려준다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', (_url, init) => {
+      const body = JSON.parse(init?.body as string)
+      expect(body.hook_key).toBe('hook-A_1')
+      return new Response(
+        JSON.stringify({
+          draft_id: 'draft-1', version_id: 'ver-3', version: 3, author_kind: 'agent',
+          body_sha256: 'sha3', tagged_link_preview: null, hook_key: 'hook-A_1',
+        }),
+        { status: 201 },
+      )
+    })
+    const result = await createOrUpdateChannelPostDraft(
+      { workItemId: 'wi-1', connectionId: 'conn-1', text: 'hello', hookKey: 'hook-A_1' },
+      { ...API, fetchImpl },
+    )
+    expect(result.hookKey).toBe('hook-A_1')
+  })
+
+  test('story #3645 — 형식 위반(422, 서버 Pydantic validator)도 다른 422와 동형으로 옮긴다(재작성 0)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ detail: [{ msg: 'hook_key는 64자 이하의 영문·숫자·-·_ 조합이어야 합니다' }] }),
+        { status: 422 },
+      ),
+    )
+    await expect(
+      createOrUpdateChannelPostDraft(
+        { workItemId: 'wi-1', connectionId: 'conn-1', text: 'hi', hookKey: 'bad key!' },
+        { ...API, fetchImpl },
+      ),
+    ).rejects.toThrow(ChannelPostApiError)
   })
 
   test('link_url을 주면 body에 실리고, 응답의 tagged_link_preview를 그대로 돌려준다', async () => {

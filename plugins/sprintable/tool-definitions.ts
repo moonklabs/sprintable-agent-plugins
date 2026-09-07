@@ -231,6 +231,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Optional link to append — when set, the response includes a tagged_link_preview.',
         },
+        hook_key: {
+          type: 'string',
+          description:
+            'Optional analytics label for A/B tagging the hook (caption opener) — up to 64 chars, ' +
+            'letters/digits/-/_ only. Not part of the content seal (changing it never triggers ' +
+            're-approval); the value in effect at publish time is copied into insight-snapshot ' +
+            'evidence and later edits do not change already-recorded evidence (story #3645).',
+        },
       },
       required: ['work_item', 'connection_id', 'text'],
       additionalProperties: false,
