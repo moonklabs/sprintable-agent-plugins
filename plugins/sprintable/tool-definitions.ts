@@ -259,8 +259,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'what it cannot fix (aspect ratio, undecodable, animated). Calling this again on the same draft ' +
       'adds another image (carousel channels) or replaces the cover (video drafts) and creates a new ' +
       'version, same as editing text. Attaching the exact same image bytes to different drafts always ' +
-      'produces the same content hash server-side — useful when comparing performance across posts ' +
-      'that share the same visual asset but different hooks (story #3666).',
+      'produces the same content hash server-side (story #3666) — pair this with create_channel_post_' +
+      'draft\'s hook_key (story #3645) to compare hooks on a shared asset: e.g. create draft A with ' +
+      'hook_key "hook-A" and draft B with hook_key "hook-B", attach the same image_base64 to both, ' +
+      'then submit and publish each — the shared image hash groups them as "same asset, different ' +
+      'hook" for performance comparison.',
     inputSchema: {
       type: 'object',
       properties: {
