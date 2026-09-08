@@ -20,7 +20,10 @@ and result → failure action).
 
 1. **Create the draft** — `create_channel_post_draft` or `create_site_post_draft`.
    Calling it again with the same `work_item`(+`connection_id` for channel_post) adds a
-   new version to the *same* draft; it never publishes anything by itself.
+   new version to the *same* draft; it never publishes anything by itself. For
+   `create_channel_post_draft`, pass `hook_key` when you want the performance board to
+   group this post with other posts sharing the same hook (caption opener) — it is
+   optional and purely a label, never checked at publish time.
 2. **Fix content-rule violations, if any** — the create response includes
    `violations: []`. Empty means clean. A non-empty array means the org has content
    rules configured and this draft trips one or more of them (e.g. a banned term, a
