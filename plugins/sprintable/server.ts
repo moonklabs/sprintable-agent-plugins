@@ -39,6 +39,7 @@ import {
   submitChannelPostDraft,
   listAgentVisibleChannelConnections,
   getChannelPostPublication,
+  attachChannelPostImage,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
@@ -379,6 +380,28 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             logEvent('channel_post_draft_text_too_long', {
               work_item: workItem, max_length: err.maxLength, current_length: err.currentLength,
             })
+          }
+          throw err
+        }
+      }
+      case 'attach_channel_post_image': {
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const imageBase64 = String(args.image_base64 ?? '')
+        if (!imageBase64) throw new Error('image_base64 is required')
+        const contentType = String(args.content_type ?? '')
+        if (!contentType) throw new Error('content_type is required')
+        try {
+          const result = await attachChannelPostImage(
+            { draftId, imageBase64, contentType }, { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('channel_post_image_attached', {
+            draft_id: draftId, image_id: result.imageId, version: result.version, was_converted: result.wasConverted,
+          })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ChannelPostDraftNotFoundError) {
+            logEvent('channel_post_image_attach_not_found', { draft_id: draftId })
           }
           throw err
         }

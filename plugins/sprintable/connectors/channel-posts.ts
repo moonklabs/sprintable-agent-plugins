@@ -418,3 +418,110 @@ export async function getChannelPostPublication(
   if (!res.ok) throw new ChannelPostApiError(`channel post publication read failed: ${res.status}`, undefined, res.status)
   return (await res.json()) as Record<string, unknown>
 }
+
+export interface AttachChannelPostImageParams {
+  draftId: string
+  /** base64 인코딩된 원본 이미지 바이트(순수 base64, data: URI 접두사 없이). */
+  imageBase64: string
+  contentType: string
+}
+
+export interface AttachChannelPostImageResult {
+  imageId: string
+  draftId: string
+  versionId: string
+  version: number
+  originalWidth: number
+  originalHeight: number
+  originalBytes: number
+  finalWidth: number
+  finalHeight: number
+  finalBytes: number
+  wasConverted: boolean
+  imageUrl: string | null
+  /** 캐러셀 순서(0-indexed) — 같은 draft에 여러 장 첨부 시 이 값으로 정렬된다. */
+  position: number
+}
+
+/**
+ * story #3666(Phase2·마케팅운영, 페드루 PO 確定 2026-09-07) — POST .../channel-posts/
+ * drafts/{draftId}/assets/import-image(backend/app/routers/channel_posts.py 신규,
+ * story #3666 BE PR). 미르코가 배포 52 표본(3656 소재/훅 그룹 성과 비교)을 MCP로
+ * 준비하려 했으나 create_channel_post_draft가 image를 안 받고, 기존 이미지 첨부는
+ * 3단계(upload-url 발급→서명 PUT→confirm)라 Bash/HTTP 클라이언트가 없는 에이전트는
+ * 스스로 못 탔다 — 이 함수가 base64 원콜로 그 갭을 닫는다(BE가 서버측에서 직접
+ * GCS에 쓰고 confirm까지 한 호출로 끝낸다).
+ *
+ * 에러 코드는 confirm 엔드포인트(3단계 플로우의 마지막 걸음)와 BE 라우터 레벨에서
+ * 이미 같은 매핑(`_confirm_image_upload_or_raise`)을 공유하므로, 여기서도 새 서브
+ * 클래스를 발명하지 않고 알려진 리터럴(CHANNEL_POST_DRAFT_NOT_FOUND)만 기존 클래스로
+ * 승격하고 나머지(CHANNEL_IMAGE_UNSUPPORTED·CHANNEL_IMAGE_UNDECODABLE·
+ * CHANNEL_POST_IMAGE_COUNT_EXCEEDED 등 confirm이 이미 정의한 ~15개 코드)는 기반
+ * 클래스(ChannelPostApiError) 그대로 code/message/detail을 보존해 던진다(§AC2
+ * "미지 code 임의 낙착 금지" 원칙과 동형 — 이 함수 입장에서는 전부 "미지"다, confirm
+ * 전용 서브클래스를 여기 또 만드는 건 두 곳에 같은 판별 사본을 두는 것).
+ */
+export async function attachChannelPostImage(
+  params: AttachChannelPostImageParams,
+  api: ChannelPostsClientConfig,
+): Promise<AttachChannelPostImageResult> {
+  const orgId = await resolveOrgId(api)
+  const fetchImpl = api.fetchImpl ?? fetch
+  const res = await fetchImpl(
+    `${apiBase(api.apiUrl)}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/import-image`,
+    {
+      method: 'POST',
+      headers: authHeaders(api.apiKey),
+      body: JSON.stringify({ image_base64: params.imageBase64, content_type: params.contentType }),
+    },
+  )
+
+  if (res.status === 404) {
+    // 카디르 실결함(플러그인 PR#47 CHANGES) — `_confirm_image_upload_or_raise`가 같은 404를
+    // CHANNEL_POST_DRAFT_NOT_FOUND(초안 없음)와 CHANNEL_IMAGE_OBJECT_NOT_FOUND(이미지
+    // 오브젝트 없음) 두 갈래로 던진다. 상태코드만으로 낙착하면 이미지오브젝트 문제를
+    // 「초안 없음」으로 오보고한다 — 이 함수 자신의 AC2(미지 code 임의 낙착 금지)를 스스로
+    // 위반하던 자리. 응답 본문의 error.code로 갈라 draft-not-found만 전용 클래스로 승격하고
+    // 나머지(image-object-not-found 포함, 미지 code도)는 기반 클래스로 code/message 보존.
+    const { code, message, detail } = await parseErrorDetail(res)
+    if (code === 'CHANNEL_POST_DRAFT_NOT_FOUND') {
+      throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
+    }
+    throw new ChannelPostApiError(message ?? `channel post image import failed: ${res.status}`, code, res.status, detail)
+  }
+  if (!res.ok) {
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel post image import failed: ${res.status}`, code, res.status, detail)
+  }
+
+  const body = (await res.json()) as {
+    image_id: string
+    draft_id: string
+    version_id: string
+    version: number
+    original_width: number
+    original_height: number
+    original_bytes: number
+    final_width: number
+    final_height: number
+    final_bytes: number
+    was_converted: boolean
+    image_url: string | null
+    position: number
+  }
+  return {
+    imageId: body.image_id,
+    draftId: body.draft_id,
+    versionId: body.version_id,
+    version: body.version,
+    originalWidth: body.original_width,
+    originalHeight: body.original_height,
+    originalBytes: body.original_bytes,
+    finalWidth: body.final_width,
+    finalHeight: body.final_height,
+    finalBytes: body.final_bytes,
+    wasConverted: body.was_converted,
+    imageUrl: body.image_url,
+    position: body.position,
+  }
+}
