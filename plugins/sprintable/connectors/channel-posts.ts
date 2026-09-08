@@ -477,8 +477,17 @@ export async function attachChannelPostImage(
   )
 
   if (res.status === 404) {
-    const { message, detail } = await parseErrorDetail(res)
-    throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
+    // 카디르 실결함(플러그인 PR#47 CHANGES) — `_confirm_image_upload_or_raise`가 같은 404를
+    // CHANNEL_POST_DRAFT_NOT_FOUND(초안 없음)와 CHANNEL_IMAGE_OBJECT_NOT_FOUND(이미지
+    // 오브젝트 없음) 두 갈래로 던진다. 상태코드만으로 낙착하면 이미지오브젝트 문제를
+    // 「초안 없음」으로 오보고한다 — 이 함수 자신의 AC2(미지 code 임의 낙착 금지)를 스스로
+    // 위반하던 자리. 응답 본문의 error.code로 갈라 draft-not-found만 전용 클래스로 승격하고
+    // 나머지(image-object-not-found 포함, 미지 code도)는 기반 클래스로 code/message 보존.
+    const { code, message, detail } = await parseErrorDetail(res)
+    if (code === 'CHANNEL_POST_DRAFT_NOT_FOUND') {
+      throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
+    }
+    throw new ChannelPostApiError(message ?? `channel post image import failed: ${res.status}`, code, res.status, detail)
   }
   if (!res.ok) {
     const { code, message, detail } = await parseErrorDetail(res)

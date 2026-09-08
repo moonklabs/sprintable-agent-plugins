@@ -497,6 +497,22 @@ describe('attachChannelPostImage (story #3666, server .../assets/import-image)',
     ).rejects.toBeInstanceOf(ChannelPostDraftNotFoundError)
   })
 
+  test('카디르 실결함(플러그인 PR#47 CHANGES) — 같은 404라도 CHANNEL_IMAGE_OBJECT_NOT_FOUND는 ChannelPostDraftNotFoundError로 오분류하지 않고 기반 클래스로 code를 원문 보존한다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(JSON.stringify({ data: null, error: { code: 'CHANNEL_IMAGE_OBJECT_NOT_FOUND', message: '이미지 오브젝트를 찾을 수 없습니다' }, meta: null }), { status: 404 }),
+    )
+    try {
+      await attachChannelPostImage({ draftId: 'draft-x', imageBase64: 'YQ==', contentType: 'image/png' }, { ...API, fetchImpl })
+      throw new Error('should have thrown')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ChannelPostDraftNotFoundError)
+      const e = err as ChannelPostApiError
+      expect(e.code).toBe('CHANNEL_IMAGE_OBJECT_NOT_FOUND')
+      expect(e.httpStatus).toBe(404)
+    }
+  })
+
   test('AC2(§ 미지 code 임의 낙착 금지) — confirm 전용 코드(예: CHANNEL_IMAGE_UNDECODABLE)는 새 서브클래스를 만들지 않고 기반 클래스로 code/message/detail을 원문 보존한다', async () => {
     const { fetchImpl } = meAndEndpointSpy('org-1', () =>
       new Response(
