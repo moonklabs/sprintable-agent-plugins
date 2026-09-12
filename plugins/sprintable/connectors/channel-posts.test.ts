@@ -423,6 +423,31 @@ describe('getChannelPostPublication (story #3489, server channel_posts.py:700-70
     )
     await expect(getChannelPostPublication({ draftId: 'draft-x' }, { ...API, fetchImpl })).rejects.toBeInstanceOf(ChannelPostDraftNotFoundError)
   })
+
+  test('story #3814 AC1 양성대조 — 404 밖의 다른 비2xx(스코프 부족 403)도 BE 봉투가 그대로 실린다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ data: null, error: { code: 'FORBIDDEN', message: "API Key scope does not permit 'content' tools" }, meta: null }),
+        { status: 403 },
+      ),
+    )
+    let caught: unknown
+    try {
+      await getChannelPostPublication({ draftId: 'draft-1' }, { ...API, fetchImpl })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ChannelPostApiError)
+    expect((caught as ChannelPostApiError).code).toBe('FORBIDDEN')
+    expect((caught as ChannelPostApiError).message).toBe("API Key scope does not permit 'content' tools")
+  })
+
+  test('story #3814 AC2 음성대조 — 본문 없는 403은 지어내지 않고 HTTP_403 유지', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () => new Response('{}', { status: 403 }))
+    await expect(getChannelPostPublication({ draftId: 'draft-1' }, { ...API, fetchImpl })).rejects.toThrow(
+      'channel post publication read failed: 403',
+    )
+  })
 })
 
 describe('listAgentVisibleChannelConnections (story #3399 AC8/AC9, server #3758)', () => {
@@ -439,11 +464,29 @@ describe('listAgentVisibleChannelConnections (story #3399 AC8/AC9, server #3758)
     expect(calls.some((c) => c.method === 'GET' && c.url.includes('/agent-visible'))).toBe(true)
   })
 
-  test('non-2xx는 명시 에러', async () => {
+  test('non-2xx는 명시 에러(AC2 음성대조 — 본문 없는 403은 지어내지 않고 HTTP_403 유지)', async () => {
     const { fetchImpl } = meAndEndpointSpy('org-1', () => new Response('{}', { status: 403 }))
     await expect(listAgentVisibleChannelConnections({ ...API, fetchImpl })).rejects.toThrow(
       'channel connections list failed: 403',
     )
+  })
+
+  test('story #3814 AC1 양성대조 — 스코프 부족 403의 BE 봉투(code·message)가 그대로 실린다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ data: null, error: { code: 'FORBIDDEN', message: "API Key scope does not permit 'content' tools" }, meta: null }),
+        { status: 403 },
+      ),
+    )
+    let caught: unknown
+    try {
+      await listAgentVisibleChannelConnections({ ...API, fetchImpl })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ChannelPostApiError)
+    expect((caught as ChannelPostApiError).code).toBe('FORBIDDEN')
+    expect((caught as ChannelPostApiError).message).toBe("API Key scope does not permit 'content' tools")
   })
 })
 

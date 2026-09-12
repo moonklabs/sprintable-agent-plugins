@@ -204,6 +204,31 @@ describe('getSitePostPublication (story #3489, server site_posts.py:684-693)', (
     expect(calls.some((c) => c.method === 'GET')).toBe(true)
   })
 
+  test('story #3814 AC1 양성대조 — 404 밖의 다른 비2xx(스코프 부족 403)도 BE 봉투가 그대로 실린다', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(
+        JSON.stringify({ data: null, error: { code: 'FORBIDDEN', message: "API Key scope does not permit 'content' tools" }, meta: null }),
+        { status: 403 },
+      ),
+    )
+    let caught: unknown
+    try {
+      await getSitePostPublication({ draftId: 'd1' }, { ...API, fetchImpl })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(SitePostApiError)
+    expect((caught as SitePostApiError).code).toBe('FORBIDDEN')
+    expect((caught as SitePostApiError).message).toBe("API Key scope does not permit 'content' tools")
+  })
+
+  test('story #3814 AC2 음성대조 — 본문 없는 403은 지어내지 않고 HTTP_403 유지', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () => new Response('{}', { status: 403 }))
+    await expect(getSitePostPublication({ draftId: 'd1' }, { ...API, fetchImpl })).rejects.toThrow(
+      'site post publication read failed: 403',
+    )
+  })
+
   test('⭐404 — SitePostDraftNotFoundError', async () => {
     const { fetchImpl } = meAndEndpointSpy('org-1', () =>
       new Response(JSON.stringify({ data: null, error: { message: 'not found' }, meta: null }), { status: 404 }),

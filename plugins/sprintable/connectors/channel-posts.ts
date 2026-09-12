@@ -257,7 +257,13 @@ export async function createOrUpdateChannelPostDraft(
     }
     throw new ChannelPostApiError(message ?? `HTTP 422`, code, 422, detail)
   }
-  if (!res.ok) throw new ChannelPostApiError(`channel post draft create/update failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814 — 위 409/422 분기에 안 걸리는 다른 비2xx(예: 403 FORBIDDEN, 500 등)가
+    // 이 제네릭 폴백으로 떨어질 때도 서버 봉투를 그대로 읽는다(다른 분기와 동일하게
+    // parseErrorDetail 재사용 — "지어내지 않는다" 원칙 그대로, 새 패턴 발명 0).
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel post draft create/update failed: ${res.status}`, code, res.status, detail)
+  }
 
   const body = (await res.json()) as {
     draft_id: string
@@ -354,7 +360,11 @@ export async function submitChannelPostDraft(
     }
     throw new ChannelPostApiError(message ?? `HTTP 422`, code, 422, detail)
   }
-  if (!res.ok) throw new ChannelPostApiError(`channel post draft submit failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814 — 위 404/409/422 분기 밖의 다른 비2xx도 봉투를 그대로 읽는다(동일 원칙).
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel post draft submit failed: ${res.status}`, code, res.status, detail)
+  }
 
   const body = (await res.json()) as { gate_id: string; version_id: string; content_sha256: string; status: string }
   return { gateId: body.gate_id, versionId: body.version_id, contentSha256: body.content_sha256, status: body.status }
@@ -382,7 +392,15 @@ export async function listAgentVisibleChannelConnections(
     `${apiBase(api.apiUrl)}/api/v2/organizations/${orgId}/channel-connections/agent-visible`,
     { headers: authHeaders(api.apiKey) },
   )
-  if (!res.ok) throw new ChannelPostApiError(`channel connections list failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814(민 customer-zero 실측 2026-09-12) — 이 함수엔 404/409류 전용 분기가
+    // 아예 없어 모든 비2xx(특히 스코프 부족 403)가 여기로 떨어지는데, 봉투를 안 읽어
+    // 에이전트에게 「HTTP_403·detail null」만 보였다(BE 원문은
+    // {"error":{"code":"FORBIDDEN","message":"API Key scope does not permit 'content' tools"}}
+    // — 다음 행동이 그대로 적힌 문구인데 지워졌다). 다른 함수와 동일하게 parseErrorDetail로 통일.
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel connections list failed: ${res.status}`, code, res.status, detail)
+  }
   const body = (await res.json()) as { id: string; channel: string; account_label: string | null; status: string }[]
   return body.map((r) => ({ id: r.id, channel: r.channel, accountLabel: r.account_label, status: r.status }))
 }
@@ -415,7 +433,11 @@ export async function getChannelPostPublication(
     const { message, detail } = await parseErrorDetail(res)
     throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
   }
-  if (!res.ok) throw new ChannelPostApiError(`channel post publication read failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814 — 404 밖의 다른 비2xx(예: 스코프 부족 403)도 봉투를 그대로 읽는다.
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel post publication read failed: ${res.status}`, code, res.status, detail)
+  }
   return (await res.json()) as Record<string, unknown>
 }
 
