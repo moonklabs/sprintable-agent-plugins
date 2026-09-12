@@ -189,7 +189,12 @@ export async function createOrUpdateSitePostDraft(
     if (parsed.code === 'MEDIA_NOT_SUPPORTED_PHASE0') throw new SitePostMediaNotSupportedError(parsed.message ?? 'media not supported', 422, parsed.detail)
     throwFor4xx(res, parsed)
   }
-  if (!res.ok) throw new SitePostApiError(`site post draft create/update failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814 — channel-posts.ts와 동일 결함 클래스: 위 4xx 분기 밖의 다른 비2xx도
+    // 봉투를 그대로 읽는다(parseErrorDetail 재사용, 새 패턴 발명 0).
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new SitePostApiError(message ?? `site post draft create/update failed: ${res.status}`, code, res.status, detail)
+  }
 
   const respBody = (await res.json()) as {
     draft_id: string; version_id: string; version: number; author_kind: string; body_sha256: string; violations: unknown[]
@@ -260,7 +265,11 @@ export async function submitSitePostDraft(
     }
     throwFor4xx(res, parsed)
   }
-  if (!res.ok) throw new SitePostApiError(`site post draft submit failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814 — 위 4xx 분기 밖의 다른 비2xx도 봉투를 그대로 읽는다.
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new SitePostApiError(message ?? `site post draft submit failed: ${res.status}`, code, res.status, detail)
+  }
 
   const body = (await res.json()) as { gate_id: string; version_id: string; content_sha256: string; status: string }
   return { gateId: body.gate_id, versionId: body.version_id, contentSha256: body.content_sha256, status: body.status }
@@ -286,6 +295,10 @@ export async function getSitePostPublication(
     const { message, detail } = await parseErrorDetail(res)
     throw new SitePostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
   }
-  if (!res.ok) throw new SitePostApiError(`site post publication read failed: ${res.status}`, undefined, res.status)
+  if (!res.ok) {
+    // story #3814 — 404 밖의 다른 비2xx도 봉투를 그대로 읽는다.
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new SitePostApiError(message ?? `site post publication read failed: ${res.status}`, code, res.status, detail)
+  }
   return (await res.json()) as Record<string, unknown>
 }
