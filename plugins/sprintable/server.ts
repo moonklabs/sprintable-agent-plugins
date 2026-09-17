@@ -23,6 +23,7 @@ import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta } from './channel-notification-meta'
+import { nextFailureNotice, channelDownMessage } from './channel-failure-notice'
 import { formatToolError } from './tool-error'
 import {
   publishStibeeCampaign,
@@ -903,6 +904,25 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
   if (seq > 0) await _sendAck(seq)
 }
 
+// [SID:4026] 채널이 안 붙을 때(빈 키·401·403) 세션에 «1회» 알림. 지금까지 이 실패는 stderr(로그
+// 자리 없음)에만 남아 세션이 몇 시간 귀머거리인 줄 몰랐다(4024). 순수 판정은 channel-failure-notice.
+let _lastFailureNotice: string | null = null
+function noticeChannelFailure(reason: string): void {
+  const d = nextFailureNotice(reason, _lastFailureNotice)
+  _lastFailureNotice = d.nextLast
+  if (!d.notify) return
+  void mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content: channelDownMessage(reason),
+      meta: buildChannelNotificationMeta({ messageId: `channel-down-${reason}` }),
+    },
+  })
+}
+function clearChannelFailure(): void {
+  _lastFailureNotice = nextFailureNotice(null, _lastFailureNotice).nextLast // → null(다음 실패는 다시 1회)
+}
+
 async function _consumeStream(): Promise<void> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${API_KEY}`,
@@ -930,12 +950,16 @@ async function _consumeStream(): Promise<void> {
     } catch {}
     if (retryAfter > 0) _reconnectDelay = Math.max(_reconnectDelay, retryAfter * 1000)
     process.stderr.write(`[sprintable] stream refused: ${code} (HTTP ${resp.status}) — backoff ${_reconnectDelay}ms\n`)
+    // [SID:4026] 인증 거절(401/403)은 backoff만으론 안 낫는다(키가 문제) — 세션에 1회 알린다.
+    // 429/503(슬롯 한도) 등 일시적 코드는 알리지 않는다(곧 재연결).
+    if (resp.status === 401 || resp.status === 403) noticeChannelFailure(`HTTP ${resp.status}`)
     throw new Error(`stream refused: ${code} (HTTP ${resp.status})`)
   }
   if (!resp.body) throw new Error('no response body')
 
   process.stderr.write('[sprintable] SSE stream open\n')
   _reconnectDelay = 2000 // 성공 시 backoff 리셋
+  clearChannelFailure() // [SID:4026] 연결 성공 → 실패 알림 상태 해제(다음 실패는 다시 1회)
 
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
@@ -983,6 +1007,9 @@ async function _runStream(): Promise<void> {
   }
   if (!API_KEY) {
     process.stderr.write('[sprintable] SPRINTABLE_API_KEY / AGENT_API_KEY not set — SSE disabled\n')
+    // [SID:4026] 빈 키 = SSE가 아예 안 뜸(4024 실측: 재기동 뒤 키 위치를 못 찾아 빈 키). stderr만
+    // 남기면 세션이 몇 시간 귀머거리인 줄 모른다 → 세션에 1회 알린다.
+    noticeChannelFailure('no-key')
     return
   }
 
