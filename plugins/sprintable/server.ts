@@ -907,20 +907,38 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
 // [SID:4026] 채널이 안 붙을 때(빈 키·401·403) 세션에 «1회» 알림. 지금까지 이 실패는 stderr(로그
 // 자리 없음)에만 남아 세션이 몇 시간 귀머거리인 줄 몰랐다(4024). 순수 판정은 channel-failure-notice.
 let _lastFailureNotice: string | null = null
-function noticeChannelFailure(reason: string): void {
-  const d = nextFailureNotice(reason, _lastFailureNotice)
-  _lastFailureNotice = d.nextLast
-  if (!d.notify) return
+// [SID:4026·PO CHANGES1] connect 완료 ≠ 클라이언트 초기화 완료 — 초기화 前 나간 알림은 버려질 수
+// 있다(빈 키 알림이 _runStream에서 connect 직후 나가는 바로 그 경우). 초기화 신호(oninitialized)
+// 뒤로 큐잉했다가 flush. 초기화 뒤엔 곧바로 내보낸다.
+let _clientInitialized = false
+const _pendingFailureNotices: string[] = []
+function _emitChannelDown(reason: string): void {
   void mcp.notification({
     method: 'notifications/claude/channel',
     params: {
       content: channelDownMessage(reason),
-      meta: buildChannelNotificationMeta({ messageId: `channel-down-${reason}` }),
+      // [SID:4026·PO 비차단] messageId에 시각 — 복구 뒤 같은 사유 재실패가 클라이언트 중복제거로
+      // 버려지지 않게(고정 id면 dedup됨).
+      meta: buildChannelNotificationMeta({ messageId: `channel-down-${reason}-${Date.now()}` }),
     },
   })
 }
+function noticeChannelFailure(reason: string): void {
+  const d = nextFailureNotice(reason, _lastFailureNotice)
+  _lastFailureNotice = d.nextLast
+  if (!d.notify) return
+  if (_clientInitialized) _emitChannelDown(reason)
+  else _pendingFailureNotices.push(reason)
+}
 function clearChannelFailure(): void {
   _lastFailureNotice = nextFailureNotice(null, _lastFailureNotice).nextLast // → null(다음 실패는 다시 1회)
+}
+// 클라이언트 초기화 완료 → 큐에 쌓인 알림을 한 번에 내보낸다(초기화 전 유실 방지).
+const _priorOnInitialized = mcp.oninitialized
+mcp.oninitialized = () => {
+  _priorOnInitialized?.()
+  _clientInitialized = true
+  for (const reason of _pendingFailureNotices.splice(0)) _emitChannelDown(reason)
 }
 
 async function _consumeStream(): Promise<void> {
