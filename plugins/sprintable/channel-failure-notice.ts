@@ -26,3 +26,44 @@ export function nextFailureNotice(
 export function channelDownMessage(reason: string): string {
   return `Sprintable 채널이 연결되지 않았어요 — DM이 자동으로 들어오지 않아요 (${reason}).`
 }
+
+/**
+ * [SID:4026·PO 조건1] 초기화 전 알림은 클라이언트에 버려질 수 있어(내보냄 ≠ 주입) 초기화 뒤로
+ * 큐잉했다가 한 번에 내보낸다. 핵심: **markInitialized가 한 번도 안 불리면 큐가 영영 안 나가는**
+ * 조용한 실패(이 카드가 없애려는 바로 그 모양)를 막아야 한다 — 호출부는 gate 만든 «직후»에도
+ * 이미 초기화됐는지 확認해 markInitialized를 한 번 더 부른다(멱등). emit은 콜백 주입(순수 테스트).
+ */
+export class ChannelNoticeGate {
+  private initialized = false
+  private pending: string[] = []
+  private lastNotified: string | null = null
+  constructor(private readonly emit: (reason: string) => void) {}
+
+  /** 실패 알림 요청 — 같은 사유 반복 금지·초기화 전이면 큐잉. */
+  notice(reason: string): void {
+    const d = nextFailureNotice(reason, this.lastNotified)
+    this.lastNotified = d.nextLast
+    if (!d.notify) return
+    if (this.initialized) this.emit(reason)
+    else this.pending.push(reason)
+  }
+
+  /** 연결 성공 — 사유 상태 해제(다음 실패는 다시 1회). */
+  clear(): void {
+    this.lastNotified = nextFailureNotice(null, this.lastNotified).nextLast
+  }
+
+  /** 클라이언트 초기화 완료 — 큐 flush(멱등: 두 번째부터 no-op). */
+  markInitialized(): void {
+    if (this.initialized) return
+    this.initialized = true
+    const queued = this.pending
+    this.pending = []
+    for (const reason of queued) this.emit(reason)
+  }
+
+  /** 테스트용: 초기화 상태. */
+  get isInitialized(): boolean {
+    return this.initialized
+  }
+}
