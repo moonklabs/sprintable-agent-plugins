@@ -3,7 +3,7 @@
  * AC1 테스트: 빈 키 → 알림 1 · 401 연속 3회 → 알림 1 · 복구 뒤 재실패 → 알림 1.
  */
 import { describe, test, expect } from 'bun:test'
-import { nextFailureNotice, channelDownMessage } from './channel-failure-notice'
+import { nextFailureNotice, channelDownMessage, ChannelNoticeGate } from './channel-failure-notice'
 
 describe('nextFailureNotice', () => {
   test('빈 키 → 알림 1', () => {
@@ -44,5 +44,54 @@ describe('channelDownMessage', () => {
     expect(m).toContain('DM이 자동으로 들어오지 않아요')
     expect(m).toContain('no-key')
     expect(m.endsWith('요.') || m.endsWith(').')).toBe(true)
+  })
+})
+
+describe('ChannelNoticeGate (초기화 큐잉·PO 조건1)', () => {
+  test('초기화 전 알림은 큐잉·markInitialized에서 한 번에 flush', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.notice('no-key')
+    expect(out).toEqual([]) // 초기화 전 → 안 나감(큐잉)
+    g.markInitialized()
+    expect(out).toEqual(['no-key']) // 초기화 → flush
+  })
+
+  test('이미 초기화된 뒤(markInitialized 선행)면 notice가 즉시 emit', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.markInitialized() // «놓친 초기화» 시나리오 = 대입 전 이미 init
+    g.notice('no-key')
+    expect(out).toEqual(['no-key']) // 큐잉 없이 즉시
+  })
+
+  test('markInitialized 멱등 — 두 번째는 재flush 안 함', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.notice('HTTP 401')
+    g.markInitialized()
+    g.markInitialized() // 두 번째 호출
+    expect(out).toEqual(['HTTP 401']) // 한 번만
+    expect(g.isInitialized).toBe(true)
+  })
+
+  test('같은 사유 반복은 큐잉 단계에서도 1회만', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.notice('HTTP 401')
+    g.notice('HTTP 401')
+    g.notice('HTTP 401')
+    g.markInitialized()
+    expect(out).toEqual(['HTTP 401'])
+  })
+
+  test('clear 뒤 같은 사유 재실패는 다시 1회(초기화 상태)', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.markInitialized()
+    g.notice('HTTP 401')
+    g.clear() // 연결 성공
+    g.notice('HTTP 401') // 재실패
+    expect(out).toEqual(['HTTP 401', 'HTTP 401'])
   })
 })

@@ -23,7 +23,7 @@ import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta } from './channel-notification-meta'
-import { nextFailureNotice, channelDownMessage } from './channel-failure-notice'
+import { channelDownMessage, ChannelNoticeGate } from './channel-failure-notice'
 import { formatToolError } from './tool-error'
 import {
   publishStibeeCampaign,
@@ -998,13 +998,7 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
 }
 
 // [SID:4026] 채널이 안 붙을 때(빈 키·401·403) 세션에 «1회» 알림. 지금까지 이 실패는 stderr(로그
-// 자리 없음)에만 남아 세션이 몇 시간 귀머거리인 줄 몰랐다(4024). 순수 판정은 channel-failure-notice.
-let _lastFailureNotice: string | null = null
-// [SID:4026·PO CHANGES1] connect 완료 ≠ 클라이언트 초기화 완료 — 초기화 前 나간 알림은 버려질 수
-// 있다(빈 키 알림이 _runStream에서 connect 직후 나가는 바로 그 경우). 초기화 신호(oninitialized)
-// 뒤로 큐잉했다가 flush. 초기화 뒤엔 곧바로 내보낸다.
-let _clientInitialized = false
-const _pendingFailureNotices: string[] = []
+// 자리 없음)에만 남아 세션이 몇 시간 귀머거리인 줄 몰랐다(4024). 큐잉/flush/dedup은 ChannelNoticeGate.
 function _emitChannelDown(reason: string): void {
   void mcp.notification({
     method: 'notifications/claude/channel',
@@ -1016,23 +1010,24 @@ function _emitChannelDown(reason: string): void {
     },
   })
 }
+// [SID:4026·PO CHANGES1] connect 완료 ≠ 클라이언트 초기화 완료 — 초기화 前 나간 알림은 버려질 수
+// 있어 gate가 초기화 뒤로 큐잉했다 flush.
+const _noticeGate = new ChannelNoticeGate(_emitChannelDown)
 function noticeChannelFailure(reason: string): void {
-  const d = nextFailureNotice(reason, _lastFailureNotice)
-  _lastFailureNotice = d.nextLast
-  if (!d.notify) return
-  if (_clientInitialized) _emitChannelDown(reason)
-  else _pendingFailureNotices.push(reason)
+  _noticeGate.notice(reason)
 }
 function clearChannelFailure(): void {
-  _lastFailureNotice = nextFailureNotice(null, _lastFailureNotice).nextLast // → null(다음 실패는 다시 1회)
+  _noticeGate.clear()
 }
-// 클라이언트 초기화 완료 → 큐에 쌓인 알림을 한 번에 내보낸다(초기화 전 유실 방지).
+// [SID:4026·PO 조건1] 이 대입이 `await mcp.connect` 뒤라, 그 사이 클라이언트 초기화가 먼저 끝나면
+// oninitialized handler가 영영 안 불려 큐가 한 번도 안 나간다(이 카드가 없애려는 조용한 실패 모양).
+// → ① oninitialized로 flush를 걸고 ② 대입 시점에 이미 초기화됐으면(getClientVersion 존재) 즉시 flush.
 const _priorOnInitialized = mcp.oninitialized
 mcp.oninitialized = () => {
   _priorOnInitialized?.()
-  _clientInitialized = true
-  for (const reason of _pendingFailureNotices.splice(0)) _emitChannelDown(reason)
+  _noticeGate.markInitialized()
 }
+if (mcp.getClientVersion() !== undefined) _noticeGate.markInitialized()
 
 async function _consumeStream(): Promise<void> {
   const headers: Record<string, string> = {
