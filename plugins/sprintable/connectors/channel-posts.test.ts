@@ -12,6 +12,7 @@ import {
   listAgentVisibleChannelConnections,
   getChannelPostPublication,
   attachChannelPostImage,
+  attachChannelPostVideo,
   ChannelPostApiError,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
@@ -597,5 +598,138 @@ describe('attachChannelPostImage (story #3666, server .../assets/import-image)',
 
     expect(urls.some((u) => u.includes('/drafts/draft-a/assets/import-image'))).toBe(true)
     expect(urls.some((u) => u.includes('/drafts/draft-b/assets/import-image'))).toBe(true)
+  })
+})
+
+describe('attachChannelPostVideo (story #4088, server channel_posts.py video/{upload-url,confirm})', () => {
+  const UPLOAD_URL = 'https://storage.googleapis.com/bucket/signed-put?sig=abc'
+  const CONFIRM_BODY = {
+    video_id: 'vid-1', draft_id: 'draft-1', version_id: 'ver-2', version: 2,
+    duration_seconds: 6.0, width: 720, height: 1280, codec: 'avc1', original_bytes: 3,
+    video_url: 'https://storage.googleapis.com/bucket/x.mp4',
+  }
+
+  function threeHopSpy(orgId: string, opts: {
+    putStatus?: number
+    confirmResponse?: Response
+    uploadUrlResponse?: Response
+  } = {}) {
+    const calls: { url: string; method: string; body?: unknown }[] = []
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body });
+      if (url.includes('/api/v2/auth/me')) return new Response(JSON.stringify({ org_id: orgId }), { status: 200 })
+      if (url.includes('/assets/video/upload-url')) {
+        return opts.uploadUrlResponse ?? new Response(
+          JSON.stringify({
+            upload_url: UPLOAD_URL, object_path: 'channel-media/org-1/draft-1/abc.mp4',
+            max_bytes: 104857600, required_put_headers: { 'x-goog-if-generation-match': '0' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === UPLOAD_URL) {
+        return new Response(null, { status: opts.putStatus ?? 200 })
+      }
+      if (url.includes('/assets/video/confirm')) {
+        return opts.confirmResponse ?? new Response(JSON.stringify(CONFIRM_BODY), { status: 201 })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+    return { calls, fetchImpl }
+  }
+
+  test('video_base64 — 3단계(upload-url→PUT→confirm)를 순서대로 호출하고 서버 응답을 그대로 매핑한다', async () => {
+    const { calls, fetchImpl } = threeHopSpy('org-1')
+
+    const result = await attachChannelPostVideo(
+      { draftId: 'draft-1', videoBase64: Buffer.from('abc').toString('base64'), contentType: 'video/mp4' },
+      { ...API, fetchImpl },
+    )
+
+    expect(result).toEqual({
+      videoId: 'vid-1', draftId: 'draft-1', versionId: 'ver-2', version: 2,
+      durationSeconds: 6.0, width: 720, height: 1280, codec: 'avc1', originalBytes: 3,
+      videoUrl: 'https://storage.googleapis.com/bucket/x.mp4',
+    })
+    const uploadUrlCall = calls.find((c) => c.url.includes('/assets/video/upload-url'))
+    expect(uploadUrlCall?.method).toBe('POST')
+    expect(JSON.parse(uploadUrlCall?.body as string)).toEqual({ content_type: 'video/mp4' })
+    const putCall = calls.find((c) => c.url === UPLOAD_URL)
+    expect(putCall?.method).toBe('PUT')
+    expect(Buffer.from(putCall?.body as ArrayBuffer).toString()).toBe('abc')
+    const confirmCall = calls.find((c) => c.url.includes('/assets/video/confirm'))
+    expect(confirmCall?.method).toBe('POST')
+    expect(JSON.parse(confirmCall?.body as string)).toEqual({ object_path: 'channel-media/org-1/draft-1/abc.mp4' })
+  })
+
+  test('video_path — 로컬 파일을 서버가 직접 읽어 정확한 바이트를 PUT한다(재타이핑 없음)', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'attach-video-test-'))
+    const filePath = join(dir, 'clip.mp4')
+    writeFileSync(filePath, Buffer.from('real-video-bytes'))
+
+    const { calls, fetchImpl } = threeHopSpy('org-1')
+    await attachChannelPostVideo({ draftId: 'draft-1', videoPath: filePath, contentType: 'video/mp4' }, { ...API, fetchImpl })
+
+    const putCall = calls.find((c) => c.url === UPLOAD_URL)
+    expect(Buffer.from(putCall?.body as ArrayBuffer).toString()).toBe('real-video-bytes')
+  })
+
+  test('video_path/video_base64 둘 다 주면 거부(상호배타)', async () => {
+    const { fetchImpl } = threeHopSpy('org-1')
+    await expect(
+      attachChannelPostVideo(
+        { draftId: 'draft-1', videoPath: '/tmp/x.mp4', videoBase64: 'YQ==', contentType: 'video/mp4' },
+        { ...API, fetchImpl },
+      ),
+    ).rejects.toThrow(/정확히 하나/)
+  })
+
+  test('video_path/video_base64 둘 다 없으면 거부(상호배타)', async () => {
+    const { fetchImpl } = threeHopSpy('org-1')
+    await expect(
+      attachChannelPostVideo({ draftId: 'draft-1', contentType: 'video/mp4' }, { ...API, fetchImpl }),
+    ).rejects.toThrow(/정확히 하나/)
+  })
+
+  test('confirm 404 CHANNEL_POST_DRAFT_NOT_FOUND는 ChannelPostDraftNotFoundError로 구별된다(attach_channel_post_image와 동형)', async () => {
+    const { fetchImpl } = threeHopSpy('org-1', {
+      confirmResponse: new Response(
+        JSON.stringify({ data: null, error: { code: 'CHANNEL_POST_DRAFT_NOT_FOUND', message: 'draft를 찾을 수 없습니다: draft-x' }, meta: null }),
+        { status: 404 },
+      ),
+    })
+    await expect(
+      attachChannelPostVideo({ draftId: 'draft-x', videoBase64: 'YQ==', contentType: 'video/mp4' }, { ...API, fetchImpl }),
+    ).rejects.toBeInstanceOf(ChannelPostDraftNotFoundError)
+  })
+
+  test('AC2(§ 미지 code 임의 낙착 금지) — CHANNEL_VIDEO_TOO_LARGE(confirm 전용 코드)는 새 서브클래스 없이 기반 클래스로 code/message 원문 보존', async () => {
+    const { fetchImpl } = threeHopSpy('org-1', {
+      confirmResponse: new Response(
+        JSON.stringify({ data: null, error: { code: 'CHANNEL_VIDEO_TOO_LARGE', message: '104857601bytes가 영상 업로드 상한 104857600bytes를 초과했습니다' }, meta: null }),
+        { status: 413 },
+      ),
+    })
+    try {
+      await attachChannelPostVideo({ draftId: 'draft-1', videoBase64: 'YQ==', contentType: 'video/mp4' }, { ...API, fetchImpl })
+      throw new Error('should have thrown')
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChannelPostApiError)
+      expect(err).not.toBeInstanceOf(ChannelPostDraftNotFoundError)
+      const e = err as ChannelPostApiError
+      expect(e.code).toBe('CHANNEL_VIDEO_TOO_LARGE')
+      expect(e.httpStatus).toBe(413)
+    }
+  })
+
+  test('signed PUT 자체가 실패하면(예: 서명 만료) confirm을 호출하지 않고 ChannelPostApiError로 던진다', async () => {
+    const { calls, fetchImpl } = threeHopSpy('org-1', { putStatus: 403 })
+    await expect(
+      attachChannelPostVideo({ draftId: 'draft-1', videoBase64: 'YQ==', contentType: 'video/mp4' }, { ...API, fetchImpl }),
+    ).rejects.toBeInstanceOf(ChannelPostApiError)
+    expect(calls.some((c) => c.url.includes('/assets/video/confirm'))).toBe(false)
   })
 })

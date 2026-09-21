@@ -276,6 +276,34 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    // story #4088(E-RECIPE-1, 페드루 PO 確定 2026-09-21) — attach_channel_post_image와
+    // 목적은 같지만(레시피 산출물을 승인 카드에 편입) video_path/video_base64 상호배타
+    // 쌍이다(sprintable_import_image_artifact의 image_path/image_base64 선례 재사용,
+    // 새 기전 발명 0) — 영상은 이미지보다 훨씬 커서(최대 100MB) base64 전용 단일콜이
+    // 아니라 이 도구가 내부에서 기존 signed-URL 2단계를 오케스트레이션한다.
+    name: 'attach_channel_post_video',
+    description:
+      'Attach a video to an existing channel post draft (created via create_channel_post_draft) — the ' +
+      'server orchestrates the existing signed-URL upload internally, so this is still a single tool ' +
+      'call from your side. Prefer video_path when the file is on local disk (the server reads it ' +
+      'directly — exact bytes, no retyping risk); video_base64 is for filesystem-less agents and should ' +
+      'only be used for small files (videos are much larger than images, so retyping a corrupted base64 ' +
+      'string is a real risk — see sprintable_import_image_artifact for the same tradeoff on images). ' +
+      'Exactly one of video_path/video_base64 is required. Calling this again on the same draft replaces ' +
+      'the video and creates a new version, same as editing text or attaching a new image.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string', description: 'The draft to attach the video to (from create_channel_post_draft).' },
+        video_path: { type: 'string', description: 'Local filesystem path to the video file. Mutually exclusive with video_base64.' },
+        video_base64: { type: 'string', description: 'Base64-encoded raw video bytes (no data: URI prefix). Mutually exclusive with video_path — prefer video_path for anything but small files.' },
+        content_type: { type: 'string', description: 'MIME type of the video, e.g. "video/mp4" or "video/quicktime".' },
+      },
+      required: ['draft_id', 'content_type'],
+      additionalProperties: false,
+    },
+  },
+  {
     // story #3399 AC3 — 초안 버전을 external_publish 게이트에 상신. connectors/
     // channel-posts.ts::submitChannelPostDraft가 POST .../channel-posts/drafts/{id}/submit
     // (#3374)를 부른다. 서버 실측(2026-09-03): 에이전트 키도 이 호출 가능(승인·발행만
