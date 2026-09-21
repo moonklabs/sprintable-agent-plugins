@@ -684,4 +684,30 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    // story #4111(#4109 PO 결정·#4110 BE) — 연산(Compute) 슬롯 2/2 에이전트 쪽 절반.
+    // connectors/generation-connector.ts::getGenerationConnector가
+    // GET .../events/work-items/{type}/{id}/generation-connector(#4110)를 pass-through.
+    name: 'get_generation_connector',
+    description:
+      'Read the org generation (compute) connector config and plaintext credentials bound to ' +
+      'the generation_connector-target stage of the recipe currently applied to this work item — ' +
+      'this is how you run your own inference call (e.g. Vertex) using the org\'s configured ' +
+      'provider/model/credentials instead of your own. Only works if you are a crew member of that ' +
+      'recipe (assigned via an agent role binding) and the work item is currently at that stage. ' +
+      'Returns {provider_key, label, model_config_json, credentials} as-is from the backend — this ' +
+      'tool does not interpret or call the provider for you, and the response shape may still ' +
+      'change in a follow-up story (pass-through by design). On error you get one plain-language ' +
+      'line (not an English catalog message) explaining why: wrong stage, not in this recipe\'s ' +
+      'crew, no connector registered/bound yet, or the connector was revoked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        work_item_type: { type: 'string', description: 'e.g. "story" or "task" — same values used elsewhere (create_channel_post_draft\'s work_item, evidence recording, etc).' },
+        work_item_id: { type: 'string' },
+      },
+      required: ['work_item_type', 'work_item_id'],
+      additionalProperties: false,
+    },
+  },
 ]
