@@ -48,6 +48,7 @@ import {
   ChannelPostDraftNotFoundError,
   ContentRuleViolationError,
 } from './connectors/channel-posts'
+import { getGenerationConnector } from './connectors/generation-connector'
 import {
   createOrUpdateSitePostDraft,
   submitSitePostDraft,
@@ -673,6 +674,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         logEvent('threads_insights_measured', {
           post_id: postId, work_item: workItem, evidence_recorded: result.evidenceRecorded,
         })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+      }
+      case 'get_generation_connector': {
+        const workItemType = String(args.work_item_type ?? '')
+        if (!workItemType) throw new Error('work_item_type is required')
+        const workItemId = String(args.work_item_id ?? '')
+        if (!workItemId) throw new Error('work_item_id is required')
+        // story #4111 처방② — 자격은 반환값에만. logEvent(파일 감사 로그, 위 참고)를
+        // 이 결과로 부르지 않는다 — result.credentials가 그대로 events.jsonl에 남는
+        // 것이 이 스토리가 막으려는 바로 그 클래스.
+        const result = await getGenerationConnector({ workItemType, workItemId, apiUrl: API_URL, apiKey: API_KEY })
         return { content: [{ type: 'text', text: JSON.stringify(result) }] }
       }
       default:
