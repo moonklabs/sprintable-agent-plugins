@@ -598,7 +598,7 @@ export async function attachChannelPostVideo(
   api: ChannelPostsClientConfig,
 ): Promise<AttachChannelPostVideoResult> {
   if (Boolean(params.videoPath) === Boolean(params.videoBase64)) {
-    throw new Error('video_path와 video_base64 중 정확히 하나만 지정해야 합니다.')
+    throw new Error('video_path와 video_base64 중 정확히 하나만 지정해야 해요.')
   }
   const videoBytes = params.videoPath
     ? readFileSync(params.videoPath)
