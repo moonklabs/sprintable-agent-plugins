@@ -28,6 +28,7 @@
  * `tool-error.test.ts`가 아니라 이 파일의 「미지 code는 특정 클래스로 안 떨어진다」
  * 테스트가 잡는다.
  */
+import { readFileSync } from 'node:fs'
 import { resolveOrgId } from './registry'
 
 export interface ChannelPostsClientConfig {
@@ -545,5 +546,145 @@ export async function attachChannelPostImage(
     wasConverted: body.was_converted,
     imageUrl: body.image_url,
     position: body.position,
+  }
+}
+
+export interface AttachChannelPostVideoParams {
+  draftId: string
+  /** 로컬 파일 경로 — **있으면 이걸 쓴다**(서버가 직접 읽어 바이트 정확 전송, base64
+   * 재타이핑 오탈자 위험이 없다. sprintable_import_image_artifact의 image_path와 동형
+   * 원칙). videoBase64와 상호 배타(정확히 하나). */
+  videoPath?: string
+  /** base64 인코딩된 원본 영상 바이트(순수 base64, data: URI 접두사 없이) — 파일시스템이
+   * 없는 에이전트 전용 대안. 영상은 이미지보다 훨씬 커서(최대 100MB, channel_adapters.py
+   * instagram_sandbox 실측) MCP 호출 인자로 그대로 실으면 도구 호출 텍스트가 거대해지고
+   * 모델이 그 base64 문자열을 다시 «타이핑»해야 하는 위험이 이미지보다 훨씬 크다 —
+   * videoPath를 쓸 수 있으면 항상 그쪽을 우선한다. */
+  videoBase64?: string
+  contentType: string
+}
+
+export interface AttachChannelPostVideoResult {
+  videoId: string
+  draftId: string
+  versionId: string
+  version: number
+  durationSeconds: number
+  width: number
+  height: number
+  codec: string
+  originalBytes: number
+  videoUrl: string | null
+}
+
+/**
+ * story #4088(E-RECIPE-1, 페드루 PO 確定 2026-09-21) — 레시피 live_generation 산출물(mp4)을
+ * 에이전트가 승인 카드에 직접 편입시키는 원콜 입구. `attachChannelPostImage`(story #3666)와
+ * 목적은 동형이지만 **base64 단일콜 대신 기존 2단계(signed URL 발급→PUT→confirm,
+ * channel_posts.py, story #3554)를 이 함수가 내부에서 오케스트레이션**한다 — video_max_bytes
+ * 상한(100MB, instagram_sandbox 어댑터 실측)이 base64 인플레이션(+33%)까지 더하면 image
+ * 원콜이 기대는 "인자 텍스트로 그대로 실어도 되는 크기" 전제를 벗어난다(방향 확定,
+ * 스토리 설명 "기존 2단계 재사용" 그대로 — attach_channel_post_image처럼 BE에 새
+ * 원콜 엔드포인트를 열지 않는다, BE PR #4460/#4460 후속 pin으로 upload-url·confirm 둘 다
+ * 이미 에이전트 키를 human과 동일하게 받는 것 확認됨, 신규 BE 권한 코드 0).
+ *
+ * 에러 매핑은 confirm 엔드포인트가 던지는 ~15개 코드 중 **이미 아는 리터럴만** 전용
+ * 클래스로 승격하고(ChannelPostDraftNotFoundError 재사용, attachChannelPostImage와 동형
+ * §AC2 "미지 code 임의 낙착 금지"), 나머지는 기반 클래스(ChannelPostApiError) 그대로
+ * code/message/detail을 보존해 던진다.
+ */
+export async function attachChannelPostVideo(
+  params: AttachChannelPostVideoParams,
+  api: ChannelPostsClientConfig,
+): Promise<AttachChannelPostVideoResult> {
+  if (Boolean(params.videoPath) === Boolean(params.videoBase64)) {
+    throw new Error('video_path와 video_base64 중 정확히 하나만 지정해야 해요.')
+  }
+  const videoBytes = params.videoPath
+    ? readFileSync(params.videoPath)
+    : Buffer.from(params.videoBase64 as string, 'base64')
+
+  const orgId = await resolveOrgId(api)
+  const fetchImpl = api.fetchImpl ?? fetch
+  const base = apiBase(api.apiUrl)
+
+  // ① upload-url — signed PUT 발급.
+  const uploadUrlRes = await fetchImpl(
+    `${base}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/video/upload-url`,
+    { method: 'POST', headers: authHeaders(api.apiKey), body: JSON.stringify({ content_type: params.contentType }) },
+  )
+  if (!uploadUrlRes.ok) {
+    if (uploadUrlRes.status === 404) {
+      const { message, detail } = await parseErrorDetail(uploadUrlRes)
+      throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
+    }
+    const { code, message, detail } = await parseErrorDetail(uploadUrlRes)
+    throw new ChannelPostApiError(
+      message ?? `channel post video upload-url failed: ${uploadUrlRes.status}`, code, uploadUrlRes.status, detail,
+    )
+  }
+  const uploadUrlBody = (await uploadUrlRes.json()) as {
+    upload_url: string
+    object_path: string
+    max_bytes: number
+    required_put_headers: Record<string, string>
+  }
+
+  // ② signed PUT — GCS/S3 등으로 실 바이트 직접 전송(이 서버 경유 0, storage/base.py D3
+  // 원칙). 서명이 요구하는 조건부-쓰기 헤더(required_put_headers, provider마다 이름이
+  // 다르다 — GCS는 x-goog-if-generation-match)를 그대로 얹는다.
+  const putRes = await fetchImpl(uploadUrlBody.upload_url, {
+    method: 'PUT',
+    headers: { 'Content-Type': params.contentType, ...uploadUrlBody.required_put_headers },
+    body: videoBytes,
+  })
+  if (!putRes.ok) {
+    throw new ChannelPostApiError(
+      `signed PUT failed: ${putRes.status}`, undefined, putRes.status, { object_path: uploadUrlBody.object_path },
+    )
+  }
+
+  // ③ confirm — 업로드 확인+MP4 규격 검증+계보(channel_posts.py, story #3554).
+  const confirmRes = await fetchImpl(
+    `${base}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/video/confirm`,
+    { method: 'POST', headers: authHeaders(api.apiKey), body: JSON.stringify({ object_path: uploadUrlBody.object_path }) },
+  )
+  if (confirmRes.status === 404) {
+    const { code, message, detail } = await parseErrorDetail(confirmRes)
+    if (code === 'CHANNEL_POST_DRAFT_NOT_FOUND') {
+      throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
+    }
+    throw new ChannelPostApiError(message ?? `channel post video confirm failed: ${confirmRes.status}`, code, 404, detail)
+  }
+  if (!confirmRes.ok) {
+    const { code, message, detail } = await parseErrorDetail(confirmRes)
+    throw new ChannelPostApiError(
+      message ?? `channel post video confirm failed: ${confirmRes.status}`, code, confirmRes.status, detail,
+    )
+  }
+
+  const body = (await confirmRes.json()) as {
+    video_id: string
+    draft_id: string
+    version_id: string
+    version: number
+    duration_seconds: number
+    width: number
+    height: number
+    codec: string
+    original_bytes: number
+    video_url: string | null
+  }
+  return {
+    videoId: body.video_id,
+    draftId: body.draft_id,
+    versionId: body.version_id,
+    version: body.version,
+    durationSeconds: body.duration_seconds,
+    width: body.width,
+    height: body.height,
+    codec: body.codec,
+    originalBytes: body.original_bytes,
+    videoUrl: body.video_url,
   }
 }

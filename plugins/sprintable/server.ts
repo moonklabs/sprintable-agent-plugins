@@ -40,6 +40,7 @@ import {
   listAgentVisibleChannelConnections,
   getChannelPostPublication,
   attachChannelPostImage,
+  attachChannelPostVideo,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
@@ -402,6 +403,31 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         } catch (err) {
           if (err instanceof ChannelPostDraftNotFoundError) {
             logEvent('channel_post_image_attach_not_found', { draft_id: draftId })
+          }
+          throw err
+        }
+      }
+      case 'attach_channel_post_video': {
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const videoPath = args.video_path ? String(args.video_path) : undefined
+        const videoBase64 = args.video_base64 ? String(args.video_base64) : undefined
+        if (Boolean(videoPath) === Boolean(videoBase64)) {
+          throw new Error('Exactly one of video_path or video_base64 is required')
+        }
+        const contentType = String(args.content_type ?? '')
+        if (!contentType) throw new Error('content_type is required')
+        try {
+          const result = await attachChannelPostVideo(
+            { draftId, videoPath, videoBase64, contentType }, { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('channel_post_video_attached', {
+            draft_id: draftId, video_id: result.videoId, version: result.version,
+          })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ChannelPostDraftNotFoundError) {
+            logEvent('channel_post_video_attach_not_found', { draft_id: draftId })
           }
           throw err
         }
