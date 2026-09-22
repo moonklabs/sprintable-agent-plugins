@@ -49,6 +49,7 @@ import {
   ContentRuleViolationError,
 } from './connectors/channel-posts'
 import { getGenerationConnector } from './connectors/generation-connector'
+import { getMyChannelConnectionStatus } from './connectors/channel-connection-status'
 import {
   createOrUpdateSitePostDraft,
   submitSitePostDraft,
@@ -685,6 +686,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         // 이 결과로 부르지 않는다 — result.credentials가 그대로 events.jsonl에 남는
         // 것이 이 스토리가 막으려는 바로 그 클래스.
         const result = await getGenerationConnector({ workItemType, workItemId, apiUrl: API_URL, apiKey: API_KEY })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+      }
+      case 'get_my_channel_connection_status': {
+        const workItemType = String(args.work_item_type ?? '')
+        if (!workItemType) throw new Error('work_item_type is required')
+        const workItemId = String(args.work_item_id ?? '')
+        if (!workItemId) throw new Error('work_item_id is required')
+        const result = await getMyChannelConnectionStatus({ workItemType, workItemId, apiUrl: API_URL, apiKey: API_KEY })
         return { content: [{ type: 'text', text: JSON.stringify(result) }] }
       }
       default:
