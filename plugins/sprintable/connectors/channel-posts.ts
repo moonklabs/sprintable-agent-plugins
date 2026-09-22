@@ -577,93 +577,107 @@ export interface AttachChannelPostVideoResult {
   videoUrl: string | null
 }
 
-/**
- * story #4088(E-RECIPE-1, 페드루 PO 確定 2026-09-21) — 레시피 live_generation 산출물(mp4)을
- * 에이전트가 승인 카드에 직접 편입시키는 원콜 입구. `attachChannelPostImage`(story #3666)와
- * 목적은 동형이지만 **base64 단일콜 대신 기존 2단계(signed URL 발급→PUT→confirm,
- * channel_posts.py, story #3554)를 이 함수가 내부에서 오케스트레이션**한다 — video_max_bytes
- * 상한(100MB, instagram_sandbox 어댑터 실측)이 base64 인플레이션(+33%)까지 더하면 image
- * 원콜이 기대는 "인자 텍스트로 그대로 실어도 되는 크기" 전제를 벗어난다(방향 확定,
- * 스토리 설명 "기존 2단계 재사용" 그대로 — attach_channel_post_image처럼 BE에 새
- * 원콜 엔드포인트를 열지 않는다, BE PR #4460/#4460 후속 pin으로 upload-url·confirm 둘 다
- * 이미 에이전트 키를 human과 동일하게 받는 것 확認됨, 신규 BE 권한 코드 0).
- *
- * 에러 매핑은 confirm 엔드포인트가 던지는 ~15개 코드 중 **이미 아는 리터럴만** 전용
- * 클래스로 승격하고(ChannelPostDraftNotFoundError 재사용, attachChannelPostImage와 동형
- * §AC2 "미지 code 임의 낙착 금지"), 나머지는 기반 클래스(ChannelPostApiError) 그대로
- * code/message/detail을 보존해 던진다.
- */
-export async function attachChannelPostVideo(
-  params: AttachChannelPostVideoParams,
-  api: ChannelPostsClientConfig,
-): Promise<AttachChannelPostVideoResult> {
-  if (Boolean(params.videoPath) === Boolean(params.videoBase64)) {
-    throw new Error('video_path와 video_base64 중 정확히 하나만 지정해야 해요.')
-  }
-  const videoBytes = params.videoPath
-    ? readFileSync(params.videoPath)
-    : Buffer.from(params.videoBase64 as string, 'base64')
+export interface GetChannelPostVideoUploadUrlParams {
+  draftId: string
+  contentType: string
+}
 
+export interface ChannelPostVideoUploadUrlResult {
+  uploadUrl: string
+  objectPath: string
+  /** ISO-8601 — 이 시각 뒤엔 uploadUrl이 만료(신규 발급 필요, 재사용 0). */
+  expiresAt: string
+  maxBytes: number
+  /** 서명 PUT이 요구하는 조건부-쓰기 헤더(provider마다 이름이 다르다 — GCS는
+   * x-goog-if-generation-match) — PUT 요청에 Content-Type과 함께 그대로 실어야 한다. */
+  requiredPutHeaders: Record<string, string>
+}
+
+export interface ConfirmChannelPostVideoParams {
+  draftId: string
+  /** get_channel_post_video_upload_url이 돌려준 object_path 그대로(PUT 대상과 동일). */
+  objectPath: string
+}
+
+/**
+ * story #4146(E-RECIPE-1, 페드루 PO 확定 2026-09-22) — `attachChannelPostVideo`(기존,
+ * self-host 전용)가 내부에서 부르던 ①단계(signed upload-url 발급)만 떼어 독립
+ * 노출한다. hosted MCP 크루는 이 파일이 실행되는 플러그인 서버 프로세스와 완전히
+ * 다른 런타임(자기 컨테이너/샌드박스)에 영상 바이트를 들고 있으므로, PUT을 **이
+ * 함수가 대신 하지 않는다** — 발급받은 upload_url/required_put_headers를 그대로
+ * 크루 자신의 런타임에 돌려주고, 실제 PUT은 그쪽이 한다(MCP·플러그인 서버 둘 다
+ * 바이트를 경유 0, storage/base.py D3 원칙 그대로 hosted 경로에도 적용).
+ *
+ * BE 응답 실 모양(라이브 실측, 2026-09-22 — 카드 초안의 {method, headers, video_id}
+ * 추정은 틀렸다·PO 정정 evidence): `{upload_url, object_path, expires_at, max_bytes,
+ * required_put_headers}` — video_id는 이 시점엔 아직 없다(confirm이 만든다).
+ */
+export async function getChannelPostVideoUploadUrl(
+  params: GetChannelPostVideoUploadUrlParams,
+  api: ChannelPostsClientConfig,
+): Promise<ChannelPostVideoUploadUrlResult> {
   const orgId = await resolveOrgId(api)
   const fetchImpl = api.fetchImpl ?? fetch
-  const base = apiBase(api.apiUrl)
-
-  // ① upload-url — signed PUT 발급.
-  const uploadUrlRes = await fetchImpl(
-    `${base}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/video/upload-url`,
+  const res = await fetchImpl(
+    `${apiBase(api.apiUrl)}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/video/upload-url`,
     { method: 'POST', headers: authHeaders(api.apiKey), body: JSON.stringify({ content_type: params.contentType }) },
   )
-  if (!uploadUrlRes.ok) {
-    if (uploadUrlRes.status === 404) {
-      const { message, detail } = await parseErrorDetail(uploadUrlRes)
+  if (!res.ok) {
+    if (res.status === 404) {
+      const { message, detail } = await parseErrorDetail(res)
       throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
     }
-    const { code, message, detail } = await parseErrorDetail(uploadUrlRes)
-    throw new ChannelPostApiError(
-      message ?? `channel post video upload-url failed: ${uploadUrlRes.status}`, code, uploadUrlRes.status, detail,
-    )
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel post video upload-url failed: ${res.status}`, code, res.status, detail)
   }
-  const uploadUrlBody = (await uploadUrlRes.json()) as {
+  const body = (await res.json()) as {
     upload_url: string
     object_path: string
+    expires_at: string
     max_bytes: number
     required_put_headers: Record<string, string>
   }
-
-  // ② signed PUT — GCS/S3 등으로 실 바이트 직접 전송(이 서버 경유 0, storage/base.py D3
-  // 원칙). 서명이 요구하는 조건부-쓰기 헤더(required_put_headers, provider마다 이름이
-  // 다르다 — GCS는 x-goog-if-generation-match)를 그대로 얹는다.
-  const putRes = await fetchImpl(uploadUrlBody.upload_url, {
-    method: 'PUT',
-    headers: { 'Content-Type': params.contentType, ...uploadUrlBody.required_put_headers },
-    body: videoBytes,
-  })
-  if (!putRes.ok) {
-    throw new ChannelPostApiError(
-      `signed PUT failed: ${putRes.status}`, undefined, putRes.status, { object_path: uploadUrlBody.object_path },
-    )
+  return {
+    uploadUrl: body.upload_url,
+    objectPath: body.object_path,
+    expiresAt: body.expires_at,
+    maxBytes: body.max_bytes,
+    requiredPutHeaders: body.required_put_headers,
   }
+}
 
-  // ③ confirm — 업로드 확인+MP4 규격 검증+계보(channel_posts.py, story #3554).
-  const confirmRes = await fetchImpl(
-    `${base}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/video/confirm`,
-    { method: 'POST', headers: authHeaders(api.apiKey), body: JSON.stringify({ object_path: uploadUrlBody.object_path }) },
+/**
+ * story #4146 — `attachChannelPostVideo`가 내부에서 부르던 ③단계(업로드 확인+MP4
+ * 규격 검증+계보, channel_posts.py, story #3554)만 떼어 독립 노출한다. 크루가
+ * `getChannelPostVideoUploadUrl`이 돌려준 upload_url로 자기 런타임에서 이미 PUT을
+ * 끝냈다는 전제 — 이 함수는 그 결과(object_path)만 받아 서버에 "확認해" 요청한다.
+ *
+ * 에러 매핑은 기존 attachChannelPostVideo와 동형(§AC2 "미지 code 임의 낙착 금지") —
+ * 알려진 리터럴(CHANNEL_POST_DRAFT_NOT_FOUND)만 전용 클래스, 나머지는 기반 클래스
+ * 그대로 code/message/detail 보존.
+ */
+export async function confirmChannelPostVideo(
+  params: ConfirmChannelPostVideoParams,
+  api: ChannelPostsClientConfig,
+): Promise<AttachChannelPostVideoResult> {
+  const orgId = await resolveOrgId(api)
+  const fetchImpl = api.fetchImpl ?? fetch
+  const res = await fetchImpl(
+    `${apiBase(api.apiUrl)}/api/v2/organizations/${orgId}/channel-posts/drafts/${params.draftId}/assets/video/confirm`,
+    { method: 'POST', headers: authHeaders(api.apiKey), body: JSON.stringify({ object_path: params.objectPath }) },
   )
-  if (confirmRes.status === 404) {
-    const { code, message, detail } = await parseErrorDetail(confirmRes)
+  if (res.status === 404) {
+    const { code, message, detail } = await parseErrorDetail(res)
     if (code === 'CHANNEL_POST_DRAFT_NOT_FOUND') {
       throw new ChannelPostDraftNotFoundError(message ?? `draft not found: ${params.draftId}`, 404, detail)
     }
-    throw new ChannelPostApiError(message ?? `channel post video confirm failed: ${confirmRes.status}`, code, 404, detail)
+    throw new ChannelPostApiError(message ?? `channel post video confirm failed: ${res.status}`, code, 404, detail)
   }
-  if (!confirmRes.ok) {
-    const { code, message, detail } = await parseErrorDetail(confirmRes)
-    throw new ChannelPostApiError(
-      message ?? `channel post video confirm failed: ${confirmRes.status}`, code, confirmRes.status, detail,
-    )
+  if (!res.ok) {
+    const { code, message, detail } = await parseErrorDetail(res)
+    throw new ChannelPostApiError(message ?? `channel post video confirm failed: ${res.status}`, code, res.status, detail)
   }
-
-  const body = (await confirmRes.json()) as {
+  const body = (await res.json()) as {
     video_id: string
     draft_id: string
     version_id: string
@@ -687,4 +701,48 @@ export async function attachChannelPostVideo(
     originalBytes: body.original_bytes,
     videoUrl: body.video_url,
   }
+}
+
+/**
+ * story #4088(E-RECIPE-1, 페드루 PO 確定 2026-09-21) — 레시피 live_generation 산출물(mp4)을
+ * 에이전트가 승인 카드에 직접 편입시키는 원콜 입구. `attachChannelPostImage`(story #3666)와
+ * 목적은 동형이지만 **base64 단일콜 대신 기존 2단계(signed URL 발급→PUT→confirm,
+ * channel_posts.py, story #3554)를 이 함수가 내부에서 오케스트레이션**한다.
+ *
+ * ⛔story #4146(2026-09-22) — self-host 전용(플러그인 서버가 로컬 파일을 직접 읽거나
+ * 작은 base64를 디코드해 **자기 프로세스에서** signed PUT을 대신 쏜다). hosted MCP
+ * 크루(플러그인 서버와 다른 런타임에 바이트가 있음)는 이 함수를 못 쓴다 — 대신
+ * `getChannelPostVideoUploadUrl`+`confirmChannelPostVideo`(위)를 2단계로 직접 쓴다.
+ * 이 함수 자체는 그 두 함수를 내부에서 합성해 회귀 0(②PUT만 이 함수 고유).
+ */
+export async function attachChannelPostVideo(
+  params: AttachChannelPostVideoParams,
+  api: ChannelPostsClientConfig,
+): Promise<AttachChannelPostVideoResult> {
+  if (Boolean(params.videoPath) === Boolean(params.videoBase64)) {
+    throw new Error('video_path와 video_base64 중 정확히 하나만 지정해야 해요.')
+  }
+  const videoBytes = params.videoPath
+    ? readFileSync(params.videoPath)
+    : Buffer.from(params.videoBase64 as string, 'base64')
+
+  const uploadInfo = await getChannelPostVideoUploadUrl(
+    { draftId: params.draftId, contentType: params.contentType }, api,
+  )
+
+  // ② signed PUT — GCS/S3 등으로 실 바이트 직접 전송(이 서버 경유 0, storage/base.py D3
+  // 원칙). 서명이 요구하는 조건부-쓰기 헤더를 그대로 얹는다.
+  const fetchImpl = api.fetchImpl ?? fetch
+  const putRes = await fetchImpl(uploadInfo.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': params.contentType, ...uploadInfo.requiredPutHeaders },
+    body: videoBytes,
+  })
+  if (!putRes.ok) {
+    throw new ChannelPostApiError(
+      `signed PUT failed: ${putRes.status}`, undefined, putRes.status, { object_path: uploadInfo.objectPath },
+    )
+  }
+
+  return confirmChannelPostVideo({ draftId: params.draftId, objectPath: uploadInfo.objectPath }, api)
 }
