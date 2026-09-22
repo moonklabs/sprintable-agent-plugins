@@ -41,6 +41,8 @@ import {
   getChannelPostPublication,
   attachChannelPostImage,
   attachChannelPostVideo,
+  getChannelPostVideoUploadUrl,
+  confirmChannelPostVideo,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
   ChannelPostApproverRoleMissingError,
@@ -430,6 +432,50 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         } catch (err) {
           if (err instanceof ChannelPostDraftNotFoundError) {
             logEvent('channel_post_video_attach_not_found', { draft_id: draftId })
+          }
+          throw err
+        }
+      }
+      case 'get_channel_post_video_upload_url': {
+        // story #4146(E-RECIPE-1, 페드루 PO 확定 2026-09-22) — hosted MCP 크루 전용
+        // 2단계 경로 ①(발급만). PUT은 이 서버가 안 한다 — 반환값을 그대로 크루
+        // 자신의 런타임에 넘겨 그쪽이 PUT하게 한다(바이트가 이 플러그인 서버를
+        // 경유 0).
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const contentType = String(args.content_type ?? '')
+        if (!contentType) throw new Error('content_type is required')
+        try {
+          const result = await getChannelPostVideoUploadUrl(
+            { draftId, contentType }, { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('channel_post_video_upload_url_issued', { draft_id: draftId, object_path: result.objectPath })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ChannelPostDraftNotFoundError) {
+            logEvent('channel_post_video_upload_url_not_found', { draft_id: draftId })
+          }
+          throw err
+        }
+      }
+      case 'confirm_channel_post_video': {
+        // story #4146 — hosted MCP 크루 전용 2단계 경로 ②(확認). 크루가 위 도구가
+        // 준 upload_url로 자기 런타임에서 이미 PUT을 끝냈다는 전제.
+        const draftId = String(args.draft_id ?? '')
+        if (!draftId) throw new Error('draft_id is required')
+        const objectPath = String(args.object_path ?? '')
+        if (!objectPath) throw new Error('object_path is required')
+        try {
+          const result = await confirmChannelPostVideo(
+            { draftId, objectPath }, { apiUrl: API_URL, apiKey: API_KEY },
+          )
+          logEvent('channel_post_video_confirmed', {
+            draft_id: draftId, video_id: result.videoId, version: result.version,
+          })
+          return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (err) {
+          if (err instanceof ChannelPostDraftNotFoundError) {
+            logEvent('channel_post_video_confirm_not_found', { draft_id: draftId })
           }
           throw err
         }

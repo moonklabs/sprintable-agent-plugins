@@ -13,6 +13,8 @@ import {
   getChannelPostPublication,
   attachChannelPostImage,
   attachChannelPostVideo,
+  getChannelPostVideoUploadUrl,
+  confirmChannelPostVideo,
   ChannelPostApiError,
   ChannelPostConnectionNotActiveError,
   ChannelPostTextTooLongError,
@@ -731,5 +733,86 @@ describe('attachChannelPostVideo (story #4088, server channel_posts.py video/{up
       attachChannelPostVideo({ draftId: 'draft-1', videoBase64: 'YQ==', contentType: 'video/mp4' }, { ...API, fetchImpl }),
     ).rejects.toBeInstanceOf(ChannelPostApiError)
     expect(calls.some((c) => c.url.includes('/assets/video/confirm'))).toBe(false)
+  })
+
+  // story #4146(E-RECIPE-1, 페드루 PO 확定 2026-09-22) — hosted MCP 크루가 PUT을 자기
+  // 런타임에서 하는 2단계 경로. getChannelPostVideoUploadUrl/confirmChannelPostVideo가
+  // threeHopSpy의 같은 ①③ 엔드포인트를 각자 独立 호출해도(②PUT은 이 두 함수 밖) 위
+  // attachChannelPostVideo(합성판)와 정확히 같은 서버 계약을 쓴다는 걸 함께 pin한다
+  // (드리프트 0 — 같은 mock 서버, 같은 응답 shape).
+  describe('getChannelPostVideoUploadUrl + confirmChannelPostVideo(2단계 경로, hosted MCP 크루용)', () => {
+    test('getChannelPostVideoUploadUrl — upload-url만 호출하고 서버 응답을 그대로 camelCase로 매핑(PUT·confirm은 안 부름)', async () => {
+      const { calls, fetchImpl } = threeHopSpy('org-1', {
+        uploadUrlResponse: new Response(
+          JSON.stringify({
+            upload_url: UPLOAD_URL, object_path: 'channel-media/org-1/draft-1/abc.mp4',
+            expires_at: '2026-09-22T06:00:00Z', max_bytes: 104857600,
+            required_put_headers: { 'x-goog-if-generation-match': '0' },
+          }),
+          { status: 200 },
+        ),
+      })
+
+      const result = await getChannelPostVideoUploadUrl(
+        { draftId: 'draft-1', contentType: 'video/mp4' }, { ...API, fetchImpl },
+      )
+
+      expect(result).toEqual({
+        uploadUrl: UPLOAD_URL, objectPath: 'channel-media/org-1/draft-1/abc.mp4',
+        expiresAt: '2026-09-22T06:00:00Z', maxBytes: 104857600,
+        requiredPutHeaders: { 'x-goog-if-generation-match': '0' },
+      })
+      expect(calls.some((c) => c.url === UPLOAD_URL)).toBe(false)
+      expect(calls.some((c) => c.url.includes('/assets/video/confirm'))).toBe(false)
+    })
+
+    test('getChannelPostVideoUploadUrl — draft 404는 ChannelPostDraftNotFoundError로 구별된다', async () => {
+      const { fetchImpl } = threeHopSpy('org-1', {
+        uploadUrlResponse: new Response(
+          JSON.stringify({ data: null, error: { code: 'CHANNEL_POST_DRAFT_NOT_FOUND', message: 'draft를 찾을 수 없습니다: draft-x' }, meta: null }),
+          { status: 404 },
+        ),
+      })
+      await expect(
+        getChannelPostVideoUploadUrl({ draftId: 'draft-x', contentType: 'video/mp4' }, { ...API, fetchImpl }),
+      ).rejects.toBeInstanceOf(ChannelPostDraftNotFoundError)
+    })
+
+    test('confirmChannelPostVideo — object_path만 넘겨 confirm을 직접 호출하고 서버 응답을 그대로 매핑(upload-url·PUT은 안 부름)', async () => {
+      const { calls, fetchImpl } = threeHopSpy('org-1')
+
+      const result = await confirmChannelPostVideo(
+        { draftId: 'draft-1', objectPath: 'channel-media/org-1/draft-1/abc.mp4' }, { ...API, fetchImpl },
+      )
+
+      expect(result).toEqual({
+        videoId: 'vid-1', draftId: 'draft-1', versionId: 'ver-2', version: 2,
+        durationSeconds: 6.0, width: 720, height: 1280, codec: 'avc1', originalBytes: 3,
+        videoUrl: 'https://storage.googleapis.com/bucket/x.mp4',
+      })
+      expect(calls.some((c) => c.url.includes('/assets/video/upload-url'))).toBe(false)
+      expect(calls.some((c) => c.url === UPLOAD_URL)).toBe(false)
+      const confirmCall = calls.find((c) => c.url.includes('/assets/video/confirm'))
+      expect(JSON.parse(confirmCall?.body as string)).toEqual({ object_path: 'channel-media/org-1/draft-1/abc.mp4' })
+    })
+
+    test('confirmChannelPostVideo — AC2(§ 미지 code 임의 낙착 금지) CHANNEL_VIDEO_TOO_LARGE는 기반 클래스로 code/message 원문 보존', async () => {
+      const { fetchImpl } = threeHopSpy('org-1', {
+        confirmResponse: new Response(
+          JSON.stringify({ data: null, error: { code: 'CHANNEL_VIDEO_TOO_LARGE', message: '104857601bytes가 영상 업로드 상한 104857600bytes를 초과했습니다' }, meta: null }),
+          { status: 413 },
+        ),
+      })
+      try {
+        await confirmChannelPostVideo({ draftId: 'draft-1', objectPath: 'x.mp4' }, { ...API, fetchImpl })
+        throw new Error('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ChannelPostApiError)
+        expect(err).not.toBeInstanceOf(ChannelPostDraftNotFoundError)
+        const e = err as ChannelPostApiError
+        expect(e.code).toBe('CHANNEL_VIDEO_TOO_LARGE')
+        expect(e.httpStatus).toBe(413)
+      }
+    })
   })
 })

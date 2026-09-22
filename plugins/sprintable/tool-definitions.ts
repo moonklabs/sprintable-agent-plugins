@@ -281,25 +281,84 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     // 쌍이다(sprintable_import_image_artifact의 image_path/image_base64 선례 재사용,
     // 새 기전 발명 0) — 영상은 이미지보다 훨씬 커서(최대 100MB) base64 전용 단일콜이
     // 아니라 이 도구가 내부에서 기존 signed-URL 2단계를 오케스트레이션한다.
+    //
+    // ⛔story #4146(2026-09-22, 페드루 PO 확定) — 2호 실측: hosted(원격) MCP 크루는
+    // 이 도구가 못 먹힌다 — video_path는 플러그인 서버 프로세스의 파일시스템 경로라
+    // 크루 자신의 컨테이너/샌드박스 파일을 못 읽고, video_base64는 영상이 이미지보다
+    // 훨씬 커서(최대 100MB) 도구 호출 인자로 못 싣는다(댄군이 2호에서 REST를 curl로
+    // 직접 침 — 도구 경로 0인 지름길). self-host(플러그인 서버가 크루와 같은
+    // 파일시스템을 공유하는 배포) 전용으로 좁힌다 — hosted 크루는
+    // get_channel_post_video_upload_url + confirm_channel_post_video를 쓴다.
     name: 'attach_channel_post_video',
     description:
       'Attach a video to an existing channel post draft (created via create_channel_post_draft) — the ' +
       'server orchestrates the existing signed-URL upload internally, so this is still a single tool ' +
-      'call from your side. Prefer video_path when the file is on local disk (the server reads it ' +
-      'directly — exact bytes, no retyping risk); video_base64 is for filesystem-less agents and should ' +
-      'only be used for small files (videos are much larger than images, so retyping a corrupted base64 ' +
-      'string is a real risk — see sprintable_import_image_artifact for the same tradeoff on images). ' +
-      'Exactly one of video_path/video_base64 is required. Calling this again on the same draft replaces ' +
-      'the video and creates a new version, same as editing text or attaching a new image.',
+      'call from your side. SELF-HOSTED DEPLOYMENTS ONLY: video_path requires the plugin server process ' +
+      'to have direct filesystem access to your file, and video_base64 has no practical ceiling here — ' +
+      'both assume the plugin server and your runtime share bytes some way. If you are a remote/hosted ' +
+      'MCP client (your files live in your own container/sandbox, not on the plugin server\'s disk), use ' +
+      'get_channel_post_video_upload_url + confirm_channel_post_video instead — that flow never asks you ' +
+      'to hand raw video bytes to this tool. Prefer video_path when the file is on local disk (the server ' +
+      'reads it directly — exact bytes, no retyping risk); video_base64 is for filesystem-less self-hosted ' +
+      'agents and should only be used for small files. Exactly one of video_path/video_base64 is required. ' +
+      'Calling this again on the same draft replaces the video and creates a new version, same as editing ' +
+      'text or attaching a new image.',
     inputSchema: {
       type: 'object',
       properties: {
         draft_id: { type: 'string', description: 'The draft to attach the video to (from create_channel_post_draft).' },
-        video_path: { type: 'string', description: 'Local filesystem path to the video file. Mutually exclusive with video_base64.' },
-        video_base64: { type: 'string', description: 'Base64-encoded raw video bytes (no data: URI prefix). Mutually exclusive with video_path — prefer video_path for anything but small files.' },
+        video_path: { type: 'string', description: 'Self-hosted only: local filesystem path to the video file, on the plugin server\'s own disk. Mutually exclusive with video_base64.' },
+        video_base64: { type: 'string', description: 'Self-hosted only: base64-encoded raw video bytes (no data: URI prefix). Mutually exclusive with video_path — prefer video_path for anything but small files.' },
         content_type: { type: 'string', description: 'MIME type of the video, e.g. "video/mp4" or "video/quicktime".' },
       },
       required: ['draft_id', 'content_type'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #4146(E-RECIPE-1, 페드루 PO 확定 2026-09-22) — hosted MCP 크루용 2단계
+    // 경로 ①(발급만). BE 계약은 self-host용 attach_channel_post_video가 내부에서
+    // 이미 쓰던 것 그대로 재사용(신규 BE 엔드포인트 0) — 웹 UI가 이미지/영상을
+    // 붙일 때 쓰는 것과 같은 서명 URL 2단계.
+    name: 'get_channel_post_video_upload_url',
+    description:
+      'Step 1 of 2 for attaching a video from a remote/hosted MCP runtime (your video bytes live in your ' +
+      'own container/sandbox, not on the plugin server). Returns a short-lived signed upload URL — PUT ' +
+      'your video bytes directly to upload_url yourself (from your own runtime, e.g. with curl or your ' +
+      'HTTP client), setting the Content-Type header to the same content_type you passed here plus any ' +
+      'headers listed in required_put_headers verbatim. The bytes never pass through this MCP server or ' +
+      'the plugin. Once the PUT succeeds, call confirm_channel_post_video with the returned object_path ' +
+      'to finish attaching it to the draft (step 2). The URL expires at expires_at — request a new one if ' +
+      'you miss the window. If you have direct filesystem access to the plugin server itself (self-hosted), ' +
+      'use attach_channel_post_video instead — it is a single call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string', description: 'The draft you will attach the video to (from create_channel_post_draft).' },
+        content_type: { type: 'string', description: 'MIME type of the video you will upload, e.g. "video/mp4" or "video/quicktime".' },
+      },
+      required: ['draft_id', 'content_type'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // story #4146 — hosted MCP 크루용 2단계 경로 ②(확認). get_channel_post_video_
+    // upload_url이 준 object_path로 서버에 업로드 완료를 알리면, 서버가 MP4 규격
+    // 검증(길이·화면비·코덱)+계보를 마치고 초안에 편입한다.
+    name: 'confirm_channel_post_video',
+    description:
+      'Step 2 of 2 for attaching a video from a remote/hosted MCP runtime — call this after you have ' +
+      'successfully PUT your video bytes to the upload_url returned by get_channel_post_video_upload_url. ' +
+      'Pass the same object_path from that response. The server validates the uploaded file against the ' +
+      'channel\'s video spec (duration, aspect ratio, codec) and attaches it to the draft as a new version, ' +
+      'same as attach_channel_post_video does in one call for self-hosted deployments.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        draft_id: { type: 'string', description: 'The draft to attach the video to (same one passed to get_channel_post_video_upload_url).' },
+        object_path: { type: 'string', description: 'The object_path returned by get_channel_post_video_upload_url — must match what you PUT to.' },
+      },
+      required: ['draft_id', 'object_path'],
       additionalProperties: false,
     },
   },
