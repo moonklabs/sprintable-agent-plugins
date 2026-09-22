@@ -23,6 +23,7 @@ import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta } from './channel-notification-meta'
+import { channelDownMessage, ChannelNoticeGate } from './channel-failure-notice'
 import { formatToolError } from './tool-error'
 import {
   publishStibeeCampaign,
@@ -996,6 +997,38 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
   if (seq > 0) await _sendAck(seq)
 }
 
+// [SID:4026] 채널이 안 붙을 때(빈 키·401·403) 세션에 «1회» 알림. 지금까지 이 실패는 stderr(로그
+// 자리 없음)에만 남아 세션이 몇 시간 귀머거리인 줄 몰랐다(4024). 큐잉/flush/dedup은 ChannelNoticeGate.
+function _emitChannelDown(reason: string): void {
+  void mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content: channelDownMessage(reason),
+      // [SID:4026·PO 비차단] messageId에 시각 — 복구 뒤 같은 사유 재실패가 클라이언트 중복제거로
+      // 버려지지 않게(고정 id면 dedup됨).
+      meta: buildChannelNotificationMeta({ messageId: `channel-down-${reason}-${Date.now()}` }),
+    },
+  })
+}
+// [SID:4026·PO CHANGES1] connect 완료 ≠ 클라이언트 초기화 완료 — 초기화 前 나간 알림은 버려질 수
+// 있어 gate가 초기화 뒤로 큐잉했다 flush.
+const _noticeGate = new ChannelNoticeGate(_emitChannelDown)
+function noticeChannelFailure(reason: string): void {
+  _noticeGate.notice(reason)
+}
+function clearChannelFailure(): void {
+  _noticeGate.clear()
+}
+// [SID:4026·PO 조건1] 이 대입이 `await mcp.connect` 뒤라, 그 사이 클라이언트 초기화가 먼저 끝나면
+// oninitialized handler가 영영 안 불려 큐가 한 번도 안 나간다(이 카드가 없애려는 조용한 실패 모양).
+// → ① oninitialized로 flush를 걸고 ② 대입 시점에 이미 초기화됐으면(getClientVersion 존재) 즉시 flush.
+const _priorOnInitialized = mcp.oninitialized
+mcp.oninitialized = () => {
+  _priorOnInitialized?.()
+  _noticeGate.markInitialized()
+}
+if (mcp.getClientVersion() !== undefined) _noticeGate.markInitialized()
+
 async function _consumeStream(): Promise<void> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${API_KEY}`,
@@ -1023,12 +1056,16 @@ async function _consumeStream(): Promise<void> {
     } catch {}
     if (retryAfter > 0) _reconnectDelay = Math.max(_reconnectDelay, retryAfter * 1000)
     process.stderr.write(`[sprintable] stream refused: ${code} (HTTP ${resp.status}) — backoff ${_reconnectDelay}ms\n`)
+    // [SID:4026] 인증 거절(401/403)은 backoff만으론 안 낫는다(키가 문제) — 세션에 1회 알린다.
+    // 429/503(슬롯 한도) 등 일시적 코드는 알리지 않는다(곧 재연결).
+    if (resp.status === 401 || resp.status === 403) noticeChannelFailure(`HTTP ${resp.status}`)
     throw new Error(`stream refused: ${code} (HTTP ${resp.status})`)
   }
   if (!resp.body) throw new Error('no response body')
 
   process.stderr.write('[sprintable] SSE stream open\n')
   _reconnectDelay = 2000 // 성공 시 backoff 리셋
+  clearChannelFailure() // [SID:4026] 연결 성공 → 실패 알림 상태 해제(다음 실패는 다시 1회)
 
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
@@ -1076,6 +1113,9 @@ async function _runStream(): Promise<void> {
   }
   if (!API_KEY) {
     process.stderr.write('[sprintable] SPRINTABLE_API_KEY / AGENT_API_KEY not set — SSE disabled\n')
+    // [SID:4026] 빈 키 = SSE가 아예 안 뜸(4024 실측: 재기동 뒤 키 위치를 못 찾아 빈 키). stderr만
+    // 남기면 세션이 몇 시간 귀머거리인 줄 모른다 → 세션에 1회 알린다.
+    noticeChannelFailure('no-key')
     return
   }
 
