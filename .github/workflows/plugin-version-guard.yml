@@ -90,3 +90,44 @@ jobs:
       # - plugins/sprintable/package.json has its own independent `version` (bun
       #   package version) that this guard does not check — it isn't what
       #   `claude plugin update` reads. Tracked as a known drift, not this guard's job.
+
+      - name: Verify X-Sprintable-Plugin-Version header tracks plugin.json (story #4129 AC1)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # story #4129 — no separate build/release step injects plugin.json's version
+          # into the MCP connection headers (this repo has no such pipeline; see
+          # plugin-version-guard above, which is this repo's existing "CI-enforced
+          # invariant" pattern for keeping a manifest field honest). We extend that
+          # same pattern: sprintable-grok/.mcp.json hardcodes the header value, and
+          # this step fails the PR if it ever drifts from plugin.json's version —
+          # "손으로 두 자리 맞추지 않기" enforced as always-checked (not change-gated),
+          # so a silent miss on a future version bump can't slip through.
+          #
+          # sprintable-codex is NOT covered here: its .mcp.json uses
+          # `bearer_token_env_var` (no headers block), and Codex CLI's documented
+          # custom-header mechanism (`http_headers`/`env_http_headers` in
+          # config.toml) has no confirmed equivalent field in this plugin loader's
+          # own .mcp.json schema — added once verified, not guessed (see PR body).
+          # sprintable (Claude Code) has no MCP connection to this server at all
+          # (.mcp.json only configures the local stdio sprintable-channel server) —
+          # out of scope for this header entirely.
+
+          manifest="plugins/sprintable-grok/plugin.json"
+          mcp_config="plugins/sprintable-grok/.mcp.json"
+
+          plugin_version=$(jq -r '.version // ""' "$manifest")
+          header_version=$(jq -r '.mcpServers["sprintable-mcp"].headers["X-Sprintable-Plugin-Version"] // ""' "$mcp_config")
+
+          echo "-- sprintable-grok: plugin.json version=$plugin_version, header version=$header_version"
+
+          if [ -z "$header_version" ]; then
+            echo "::error file=$mcp_config::sprintable-grok/.mcp.json is missing the X-Sprintable-Plugin-Version header (story #4129 — needed so fleet heartbeats can show plugin version without a build step)."
+            exit 1
+          fi
+
+          if [ "$plugin_version" != "$header_version" ]; then
+            echo "::error file=$mcp_config::sprintable-grok: plugin.json version ($plugin_version) and .mcp.json's X-Sprintable-Plugin-Version header ($header_version) are out of sync — bump the header alongside plugin.json (story #4129)."
+            exit 1
+          fi

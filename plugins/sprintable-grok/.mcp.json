@@ -3,7 +3,8 @@
     "sprintable-mcp": {
       "url": "https://mcp.sprintable.ai/mcp",
       "headers": {
-        "Authorization": "Bearer ${SPRINTABLE_API_KEY}"
+        "Authorization": "Bearer ${SPRINTABLE_API_KEY}",
+        "X-Sprintable-Plugin-Version": "0.1.4"
       }
     }
   }

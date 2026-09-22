@@ -97,6 +97,8 @@ Running several Sprintable-connected Grok agents on one machine? If each already
 
 **The hosted MCP tool authenticates via a header, not the credential file** — `.mcp.json` declares `"Authorization": "Bearer ${SPRINTABLE_API_KEY}"`, which Grok expands from its own process environment at load time (confirmed against `~/.grok/docs/user-guide/07-mcp-servers.md`'s `${VAR}` expansion docs — this is the standard MCP-config mechanism, not a Codex-style `bearer_token_env_var` shorthand, which Grok's docs never mention). Export `SPRINTABLE_API_KEY` in your launch environment if you want the MCP tool authenticated too; the channel (hooks) works independently of this, same split as the codex plugin.
 
+`.mcp.json` also sends a static `X-Sprintable-Plugin-Version` header (story #4129) so the fleet's workforce view can show which plugin build an agent is running without a build/release step injecting it — `.github/workflows/plugin-version-guard.yml` fails the PR if this value ever drifts from `plugin.json`'s `version`, so bump both together.
+
 ## How it works
 
 - **Channel**: `SessionStart` hook boots a detached background SSE listener (`GET /api/v2/agent/stream`) that queues inbound messages locally. `Stop` hook checks the queue on every turn boundary; if non-empty, it batches all pending messages into one `{"decision":"block","reason":...}` and Grok processes them as a new turn — no human input required. The same `Stop` hook posts `lastAssistantMessage` back via `POST /api/v2/conversations/{id}/messages`.
