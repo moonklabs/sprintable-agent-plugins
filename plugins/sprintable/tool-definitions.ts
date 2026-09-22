@@ -710,4 +710,30 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    // story #4134(#4132 REST의 얇은 소비처) — connectors/channel-connection-status.ts::
+    // getMyChannelConnectionStatus가 GET .../events/work-items/{type}/{id}/
+    // channel-connection(#4132)을 pass-through.
+    name: 'get_my_channel_connection_status',
+    description:
+      'Call this once before publishing, if the recipe stage you\'re at is bound to a channel ' +
+      'connection (published-target stage). Returns {connection_id, provider, status, ' +
+      'needs_reauth, last_verified_at, display_name} for the channel connection bound to this ' +
+      'work item\'s current stage — as-is from the backend, no reinterpretation. If needs_reauth ' +
+      'is true, do not attempt to publish: ask the project owner (a human) to reconnect the ' +
+      'channel first, since reconnecting is not something an agent can do. Only works if you are ' +
+      'a crew member of that recipe and the work item is currently at a channel-connection-target ' +
+      'stage. On error you get one plain-language line (not an English catalog message) ' +
+      'explaining why: wrong stage, not in this recipe\'s crew, or no channel connection ' +
+      'registered/bound yet.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        work_item_type: { type: 'string', description: 'e.g. "story" or "task" — same values used elsewhere (create_channel_post_draft\'s work_item, evidence recording, etc).' },
+        work_item_id: { type: 'string' },
+      },
+      required: ['work_item_type', 'work_item_id'],
+      additionalProperties: false,
+    },
+  },
 ]
