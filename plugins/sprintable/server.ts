@@ -23,7 +23,12 @@ import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta } from './channel-notification-meta'
-import { channelDownMessage, ChannelNoticeGate } from './channel-failure-notice'
+import {
+  channelDownMessage,
+  ChannelNoticeGate,
+  checkStartupChannelState,
+  startupChannelLine,
+} from './channel-failure-notice'
 import { formatToolError } from './tool-error'
 import {
   publishStibeeCampaign,
@@ -199,6 +204,16 @@ let latestInboundMeta: InboundMeta | undefined
 
 // ── MCP server ──────────────────────────────────────────────────────────────
 
+// [SID:4026 재오픈] 시작할 때 알 수 있는 채널 상태(키 없음·키 거절)는 채널 알림이 아니라 initialize
+// 응답 instructions로 — 채널 알림은 클라이언트의 채널 수신 등록 전에 도착하면 버려진다(2.1.280 실측,
+// channel-failure-notice.ts 참조). 키 확인은 최대 STARTUP_CHECK_TIMEOUT_MS(2초) — 넘으면 «확인 못 함».
+const STARTUP_CHANNEL_STATE = await checkStartupChannelState({
+  apiKey: API_KEY,
+  apiUrl: API_URL,
+  hasWebhook: HAS_WEBHOOK,
+})
+const STARTUP_CHANNEL_LINE = startupChannelLine(STARTUP_CHANNEL_STATE)
+
 const mcp = new Server(
   // #2577: 프로토콜 레벨 serverInfo.name도 .mcp.json 키(sprintable-channel)와 맞춤 —
   // hosted 도구 MCP(sprintable-mcp)와 로그·핸드셰이크 레벨에서도 분간되게.
@@ -211,7 +226,8 @@ const mcp = new Server(
     capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
     instructions:
       'Sprintable 게이트웨이 이벤트가 <channel source="sprintable"> 블록으로 도착한다. ' +
-      '응답은 reply 도구를 사용하는.',
+      '응답은 reply 도구를 사용하는.' +
+      (STARTUP_CHANNEL_LINE ? ` ${STARTUP_CHANNEL_LINE}` : ''),
   },
 )
 
@@ -1013,6 +1029,8 @@ function _emitChannelDown(reason: string): void {
 // [SID:4026·PO CHANGES1] connect 완료 ≠ 클라이언트 초기화 완료 — 초기화 前 나간 알림은 버려질 수
 // 있어 gate가 초기화 뒤로 큐잉했다 flush.
 const _noticeGate = new ChannelNoticeGate(_emitChannelDown)
+// 시작 시 instructions로 이미 전달한 사유는 첫 실패 알림에서 겹치지 않게(연결 성공 뒤 재실패는 다시 1회).
+if (STARTUP_CHANNEL_STATE.kind === 'down') _noticeGate.markDeliveredAtStartup(STARTUP_CHANNEL_STATE.reason)
 function noticeChannelFailure(reason: string): void {
   _noticeGate.notice(reason)
 }
