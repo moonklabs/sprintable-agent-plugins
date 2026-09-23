@@ -3,7 +3,13 @@
  * AC1 테스트: 빈 키 → 알림 1 · 401 연속 3회 → 알림 1 · 복구 뒤 재실패 → 알림 1.
  */
 import { describe, test, expect } from 'bun:test'
-import { nextFailureNotice, channelDownMessage, ChannelNoticeGate } from './channel-failure-notice'
+import {
+  nextFailureNotice,
+  channelDownMessage,
+  ChannelNoticeGate,
+  checkStartupChannelState,
+  startupChannelLine,
+} from './channel-failure-notice'
 
 describe('nextFailureNotice', () => {
   test('빈 키 → 알림 1', () => {
@@ -93,5 +99,110 @@ describe('ChannelNoticeGate (초기화 큐잉·PO 조건1)', () => {
     g.clear() // 연결 성공
     g.notice('HTTP 401') // 재실패
     expect(out).toEqual(['HTTP 401', 'HTTP 401'])
+  })
+})
+
+// ── [SID:4026 재오픈] 시작 시 상태 → initialize instructions ─────────────────────
+// 채널 알림은 클라이언트 등록 전에 도착하면 버려진다(2.1.280 실측). 시작 때 아는 상태는 instructions로.
+describe('checkStartupChannelState', () => {
+  const resp = (status: number) => new Response('{}', { status })
+  const recorder = (r: Response | Error | 'hang') => {
+    const calls: { url: string; auth: string | null }[] = []
+    const f = ((url: string, init?: RequestInit) => {
+      calls.push({ url, auth: new Headers(init?.headers).get('authorization') })
+      if (r === 'hang') {
+        return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
+      }
+      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
+    }) as unknown as typeof fetch
+    return { f, calls }
+  }
+
+  test('키 없음 → down(no-key) · 네트워크 호출 0', async () => {
+    const { f, calls } = recorder(resp(200))
+    expect(await checkStartupChannelState({ apiKey: '', apiUrl: 'https://x', hasWebhook: false, fetchImpl: f }))
+      .toEqual({ kind: 'down', reason: 'no-key' })
+    expect(calls.length).toBe(0)
+  })
+
+  test('401·403 → down(HTTP 401/403) — SSE 거절 사유와 같은 모양', async () => {
+    for (const st of [401, 403]) {
+      const { f } = recorder(resp(st))
+      expect(await checkStartupChannelState({ apiKey: 'k', apiUrl: 'https://x', hasWebhook: false, fetchImpl: f }))
+        .toEqual({ kind: 'down', reason: `HTTP ${st}` })
+    }
+  })
+
+  test('200 → ok · /api/v2/me에 Bearer로 1회', async () => {
+    const { f, calls } = recorder(resp(200))
+    expect(await checkStartupChannelState({ apiKey: 'k-1', apiUrl: 'https://x', hasWebhook: false, fetchImpl: f }))
+      .toEqual({ kind: 'ok' })
+    expect(calls).toEqual([{ url: 'https://x/api/v2/me', auth: 'Bearer k-1' }])
+  })
+
+  test('5xx·네트워크 오류·시간 초과 → unknown(«죽었다»로 단정하지 않음)', async () => {
+    expect(await checkStartupChannelState({ apiKey: 'k', apiUrl: 'https://x', hasWebhook: false, fetchImpl: recorder(resp(503)).f }))
+      .toEqual({ kind: 'unknown' })
+    expect(await checkStartupChannelState({ apiKey: 'k', apiUrl: 'https://x', hasWebhook: false, fetchImpl: recorder(new Error('net')).f }))
+      .toEqual({ kind: 'unknown' })
+    const t0 = Date.now()
+    expect(await checkStartupChannelState({ apiKey: 'k', apiUrl: 'https://x', hasWebhook: false, fetchImpl: recorder('hang').f, timeoutMs: 50 }))
+      .toEqual({ kind: 'unknown' })
+    expect(Date.now() - t0).toBeLessThan(1000) // 제한 시간 안에 끝난다(기동을 오래 붙잡지 않음)
+  })
+
+  test('웹훅 구성(SSE 의도적 off) → ok · 호출 0', async () => {
+    const { f, calls } = recorder(resp(401))
+    expect(await checkStartupChannelState({ apiKey: '', apiUrl: 'https://x', hasWebhook: true, fetchImpl: f }))
+      .toEqual({ kind: 'ok' })
+    expect(calls.length).toBe(0)
+  })
+})
+
+describe('startupChannelLine', () => {
+  test('down → 채널 끊김 문구(사유 코드 포함) · ok → 빈 줄', () => {
+    expect(startupChannelLine({ kind: 'down', reason: 'no-key' })).toBe(channelDownMessage('no-key'))
+    expect(startupChannelLine({ kind: 'down', reason: 'HTTP 401' })).toContain('(HTTP 401)')
+    expect(startupChannelLine({ kind: 'ok' })).toBe('')
+  })
+
+  test('unknown → «확인하지 못했어요»(끊겼다고 단정 안 함)', () => {
+    const line = startupChannelLine({ kind: 'unknown' })
+    expect(line).toContain('확인하지 못했어요')
+    expect(line).not.toContain('연결되지 않았어요')
+  })
+})
+
+describe('ChannelNoticeGate.markDeliveredAtStartup', () => {
+  test('시작 때 instructions로 준 사유는 첫 SSE 거절 알림에서 겹치지 않는다', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.markDeliveredAtStartup('HTTP 401')
+    g.markInitialized()
+    g.notice('HTTP 401')
+    expect(out).toEqual([])
+  })
+
+  test('다른 사유는 그대로 1회 · 연결 성공 뒤 재실패도 1회', () => {
+    const out: string[] = []
+    const g = new ChannelNoticeGate((r) => out.push(r))
+    g.markDeliveredAtStartup('no-key')
+    g.markInitialized()
+    g.notice('HTTP 403')
+    g.clear()
+    g.notice('HTTP 401')
+    expect(out).toEqual(['HTTP 403', 'HTTP 401'])
+  })
+})
+
+// server.ts는 import하면 mcp.connect·SSE가 돌아 직접 못 부른다 — 배선은 글자로 잡는다.
+describe('server.ts 배선(정적)', () => {
+  const src = require('fs').readFileSync(require('path').join(import.meta.dir, 'server.ts'), 'utf8') as string
+  test('시작 상태 한 줄을 initialize instructions에 덧붙인다', () => {
+    expect(src).toContain('const STARTUP_CHANNEL_STATE = await checkStartupChannelState(')
+    expect(src).toMatch(/instructions:[\s\S]{0,400}STARTUP_CHANNEL_LINE/)
+  })
+  test('시작 때 전달한 사유는 게이트에 표시(겹침 방지)', () => {
+    expect(src).toContain("if (STARTUP_CHANNEL_STATE.kind === 'down') _noticeGate.markDeliveredAtStartup(STARTUP_CHANNEL_STATE.reason)")
   })
 })
