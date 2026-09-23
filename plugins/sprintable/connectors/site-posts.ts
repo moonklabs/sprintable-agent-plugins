@@ -212,6 +212,9 @@ export interface SubmitSitePostDraftParams {
 
 export interface SubmitSitePostDraftResult {
   gateId: string
+  // story #4174 — 제출한 초안 id. 블로그 레시피(preset.marketing.blog_article)는 이 값을 다음 단계(발행 승인 대기)
+  // 이벤트 payload `site_post_draft_id`에 실어 «이 회차의 초안»을 명시 연결한다(서버 레시피 문맥 판정이 이 연결만 본다).
+  draftId: string
   versionId: string
   contentSha256: string
   status: string
@@ -271,8 +274,12 @@ export async function submitSitePostDraft(
     throw new SitePostApiError(message ?? `site post draft submit failed: ${res.status}`, code, res.status, detail)
   }
 
-  const body = (await res.json()) as { gate_id: string; version_id: string; content_sha256: string; status: string }
-  return { gateId: body.gate_id, versionId: body.version_id, contentSha256: body.content_sha256, status: body.status }
+  const body = (await res.json()) as { gate_id: string; draft_id?: string; version_id: string; content_sha256: string; status: string }
+  // 서버가 draft_id를 싣기 전(구버전 백엔드)에도 값은 같다 — 제출한 바로 그 초안 id라 요청 값으로 채운다.
+  return {
+    gateId: body.gate_id, draftId: body.draft_id ?? params.draftId, versionId: body.version_id,
+    contentSha256: body.content_sha256, status: body.status,
+  }
 }
 
 /**

@@ -707,7 +707,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'means a human still has to click Publish separately (agent keys get 403 on that ' +
       'endpoint) — omitting connection_id on a new version of an *existing* draft instead ' +
       'carries forward whatever destination that draft already had. Either way, call ' +
-      'get_site_post_publication to read the result — do not publish it yourself.',
+      'get_site_post_publication to read the result — do not publish it yourself. ' +
+      'The result includes draftId (the submitted draft): in the blog post recipe ' +
+      '(preset.marketing.blog_article), put it in site_post_draft_id when you publish the next ' +
+      'stage event, so the server knows which draft this run submitted.',
     inputSchema: {
       type: 'object',
       properties: {
