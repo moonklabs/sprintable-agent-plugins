@@ -22,7 +22,7 @@ import { currentConversationFilename } from './conversation-routing'
 import pluginManifest from './.claude-plugin/plugin.json'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
-import { buildChannelNotificationMeta } from './channel-notification-meta'
+import { buildChannelNotificationMeta, chatMessageIdOf } from './channel-notification-meta'
 import {
   channelDownMessage,
   ChannelNoticeGate,
@@ -804,6 +804,8 @@ function deliver(
     // story #2583 — 이 메타의 실제 발신자. 미지정이면 이전 동작 그대로 'sprintable'
     // 폴백(다른 호출부가 생기더라도 무회귀).
     user?: string
+    // [SID:4196] 채팅 메시지 이벤트의 채팅 메시지 id(chatMessageIdOf). 첫 인자 id는 이벤트 id.
+    message_id?: string
   },
 ): void {
   if (meta?.thread_id && meta?.reply_callback_url && meta?.reply_callback_api_key) {
@@ -829,7 +831,7 @@ function deliver(
       // 직렬화는 buildChannelNotificationMeta가 전담(하니스 string-only 계약, 위반 시
       // ProtocolError로 STDIO 알림 자체가 드롭됐던 실피해).
       meta: buildChannelNotificationMeta({
-        threadId: meta?.thread_id, messageId: id, user: meta?.user, attachments,
+        threadId: meta?.thread_id, eventId: id, messageId: meta?.message_id, user: meta?.user, attachments,
       }),
     },
   })
@@ -985,6 +987,9 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
     }
   }
 
+  // [SID:4196] 채팅 메시지 이벤트면 meta.message_id = 채팅 메시지 id(get_chat_message로 조회 가능한 값).
+  // eventId는 중복 제거 키 그대로이고 meta엔 event_id로만 실린다.
+  const chatMessageId = chatMessageIdOf(data)
   const meta =
     conversationId
       ? {
@@ -992,8 +997,9 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
           reply_callback_url: `${API_URL}/api/v2/conversations/${conversationId}/messages`,
           reply_callback_api_key: API_KEY,
           user: senderName,
+          message_id: chatMessageId,
         }
-      : { user: senderName }
+      : { user: senderName, message_id: chatMessageId }
 
   process.stderr.write(
     `[sprintable] inbound seq=${seq} conv=${conversationId} from=${senderName}: ${content.slice(0, 80)}\n`,
@@ -1020,9 +1026,10 @@ function _emitChannelDown(reason: string): void {
     method: 'notifications/claude/channel',
     params: {
       content: channelDownMessage(reason),
-      // [SID:4026·PO 비차단] messageId에 시각 — 복구 뒤 같은 사유 재실패가 클라이언트 중복제거로
-      // 버려지지 않게(고정 id면 dedup됨).
-      meta: buildChannelNotificationMeta({ messageId: `channel-down-${reason}-${Date.now()}` }),
+      // [SID:4026·PO 비차단] id에 시각 — 복구 뒤 같은 사유 재실패가 중복제거로 버려지지 않게.
+      // [SID:4196] 채팅 메시지가 아니라 message_id는 안 싣고 event_id로만(2.1.280 실측: 클라이언트는
+      // message_id 없는 알림도 주입하고, 같은 message_id 반복도 거르지 않음 — 중복 제거는 플러그인 몫).
+      meta: buildChannelNotificationMeta({ eventId: `channel-down-${reason}-${Date.now()}` }),
     },
   })
 }
