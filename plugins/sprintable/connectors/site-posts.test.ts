@@ -122,7 +122,15 @@ describe('submitSitePostDraft (story #3489, server site_posts.py:462-471)', () =
       return new Response(JSON.stringify({ gate_id: 'g1', version_id: 'v1', content_sha256: 'sha', status: 'pending' }), { status: 200 })
     })
     const result = await submitSitePostDraft({ draftId: 'd1' }, { ...API, fetchImpl })
-    expect(result).toEqual({ gateId: 'g1', versionId: 'v1', contentSha256: 'sha', status: 'pending' })
+    expect(result).toEqual({ gateId: 'g1', draftId: 'd1', versionId: 'v1', contentSha256: 'sha', status: 'pending' })
+  })
+
+  test('story #4174 — 서버 응답의 draft_id를 draftId로 싣는다(블로그 레시피 site_post_draft_id 연결 값)', async () => {
+    const { fetchImpl } = meAndEndpointSpy('org-1', () =>
+      new Response(JSON.stringify({ gate_id: 'g1', draft_id: 'd-server', version_id: 'v1', content_sha256: 'sha', status: 'pending' }), { status: 200 }),
+    )
+    const result = await submitSitePostDraft({ draftId: 'd1' }, { ...API, fetchImpl })
+    expect(result.draftId).toBe('d-server')
   })
 
   test('⭐404 — SitePostDraftNotFoundError, 서버 원문 메시지 보존', async () => {

@@ -36,6 +36,10 @@ and result → failure action).
 3. **Submit** — `submit_*_draft`. This sends the draft version to the `external_publish`
    approval Gate. **It does not publish anything.** Only a human can approve a Gate from
    the Sprintable screen.
+   In the blog post recipe (`preset.marketing.blog_article`), put the submitted draft's id
+   (`draftId` in the `submit_site_post_draft` result — the same id you passed in) in
+   `site_post_draft_id` when you publish the next stage event. That link is how the server
+   knows which draft this run submitted; without it the recipe won't publish it automatically.
 4. **Wait for a human to approve** — there is no polling tool and polling
    `get_*_publication` in a tight loop before approval has happened is wasted calls; a
    human approves (or rejects) the Gate on their own schedule, outside your control. If
