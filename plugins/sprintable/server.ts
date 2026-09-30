@@ -20,6 +20,7 @@ import { isInjectableEventType } from './inject-allowlist'
 import { formatEnvelopeText } from './envelope'
 import { currentConversationFilename } from './conversation-routing'
 import pluginManifest from './.claude-plugin/plugin.json'
+import { replyResultText } from './reply-result'
 import { pruneInboundMeta, resolveReplyTarget, type InboundMeta } from './reply-target'
 import { sanitizeAttachments, attachmentPlaceholderText, type AttachmentMeta } from './attachment-meta'
 import { buildChannelNotificationMeta, chatMessageIdOf } from './channel-notification-meta'
@@ -321,7 +322,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
           body: JSON.stringify({ content: text }),
         })
         if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text().catch(() => '')}`)
-        return { content: [{ type: 'text', text: 'sent' }] }
+        // story #4430 — a block that kept the message from someone is never a quiet `sent`
+        const answer = await resp.json().catch(() => null)
+        return { content: [{ type: 'text', text: replyResultText(answer) }] }
       }
       case 'edit_message': {
         // no WS anymore — best-effort via REST if endpoint exists
