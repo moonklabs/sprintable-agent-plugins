@@ -11,6 +11,18 @@
  */
 import { INJECTABLE_EVENT_TYPES } from './inject-allowlist'
 
+/**
+ * story 4788 (AC3 · PO 10-26) — the `Last-Event-ID` the NEXT connect of this process sends. An event the plugin drops (not on its allow-list) used to leave it where it was, so every reconnect
+ * inside a long session (the server ends a stream every few minutes) asked for everything after the last event it acted on and was sent the whole dropped tail again. The header is this
+ * connection's own request state — nothing is acked and no other connection is touched — so the dropped events can safely move it. Only forward: a lower or unreadable id changes nothing.
+ */
+export function advanceLastEventId(current: string, evId: string): string {
+  const next = Number(evId)
+  if (!evId || !Number.isFinite(next) || next <= 0) return current
+  const have = Number(current)
+  return current && Number.isFinite(have) && have >= next ? current : evId
+}
+
 export const ACCEPT_EVENTS_HEADER = 'X-Sprintable-Accept-Events'
 
 /** the types this plugin acts on, as the header value (sorted: the same bytes on every connect) */
