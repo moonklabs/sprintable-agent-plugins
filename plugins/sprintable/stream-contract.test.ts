@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { INJECTABLE_EVENT_TYPES } from './inject-allowlist'
-import { ACCEPT_EVENTS_HEADER, acceptEventsHeaderValue } from './stream-contract'
+import { ACCEPT_EVENTS_HEADER, acceptEventsHeaderValue, advanceLastEventId } from './stream-contract'
 
 describe('the declaration', () => {
   test('is the allow-list, sorted, one header', () => {
@@ -24,10 +24,50 @@ describe('the wiring in server.ts (a source pin — the stream loop is a script,
   test('the stream request carries the declaration', () => {
     expect(src).toContain('headers[ACCEPT_EVENTS_HEADER] = acceptEventsHeaderValue()')
   })
-  test('an event the plugin does not act on is still dropped without an ack (the ack is cumulative per agent — see stream-contract.ts)', () => {
-    // the one-line form: a block here (where an ack could be added) would not match this exact line
-    expect(src).toContain('  if (!isInjectableEventType(data, payload)) return\n')
-    const at = src.indexOf('if (!isInjectableEventType(data, payload)) return')
-    expect(src.slice(at, at + 400)).not.toContain('_sendAck')
+  test('an event the plugin does not act on is still dropped without an ack (the ack is cumulative per agent — see stream-contract.ts) but moves Last-Event-ID past it', () => {
+    const open = 'if (!isInjectableEventType(data, payload)) {'
+    expect(src).toContain(open)
+    const at = src.indexOf(open)
+    const block = src.slice(at, src.indexOf('\n  }\n', at) + 5)
+    expect(block).toContain('_lastEventId = advanceLastEventId(_lastEventId, evId)')
+    expect(block).toContain('return')
+    expect(block).not.toContain('_sendAck')
+    // and the move comes before the return of the block, not after a path that can leave early
+    expect(block.indexOf('advanceLastEventId')).toBeLessThan(block.lastIndexOf('return'))
+  })
+  test('the connect sends it as Last-Event-ID', () => {
+    expect(src).toContain("if (_lastEventId) headers['Last-Event-ID'] = _lastEventId")
+  })
+})
+
+describe('Last-Event-ID moves past an event the plugin drops (AC3)', () => {
+  test('forward only', () => {
+    expect(advanceLastEventId('', '10')).toBe('10')
+    expect(advanceLastEventId('10', '25')).toBe('25')
+    expect(advanceLastEventId('25', '10')).toBe('25') // never back
+    expect(advanceLastEventId('25', '25')).toBe('25')
+  })
+  test('a current value that is not a plain integer is replaced by a good one', () => {
+    expect(advanceLastEventId('abc', '8')).toBe('8')
+    expect(advanceLastEventId('1e3', '8')).toBe('8')
+  })
+  test('large ids compare exactly (beyond 2^53)', () => {
+    expect(advanceLastEventId('9007199254740992', '9007199254740993')).toBe('9007199254740993')
+    expect(advanceLastEventId('9007199254740993', '9007199254740992')).toBe('9007199254740993')
+  })
+  test('compares numbers, not strings', () => {
+    expect(advanceLastEventId('9', '10')).toBe('10')
+    expect(advanceLastEventId('100', '99')).toBe('100')
+  })
+  test('an id it cannot read changes nothing', () => {
+    for (const bad of ['', 'abc', '0', '-3', 'NaN', 'Infinity', '1e3', ' 7', '007', '7 ', '1.5', '+9']) expect(advanceLastEventId('7', bad)).toBe('7')
+    expect(advanceLastEventId('', '')).toBe('')
+    for (const bad of ['0', '-3', 'abc']) expect(advanceLastEventId('', bad)).toBe('') // (nothing seen yet: still nothing)
+  })
+  test('a reconnect after a tail of dropped events asks only for what is after it', () => {
+    // 120 dropped events (seq 6..125) after the last one acted on (5): the cursor ends at 125, so the server resumes after it
+    let cursor = '5'
+    for (let seq = 6; seq <= 125; seq++) cursor = advanceLastEventId(cursor, String(seq))
+    expect(cursor).toBe('125')
   })
 })

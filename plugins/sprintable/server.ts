@@ -17,7 +17,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isInjectableEventType } from './inject-allowlist'
-import { ACCEPT_EVENTS_HEADER, acceptEventsHeaderValue } from './stream-contract'
+import { ACCEPT_EVENTS_HEADER, acceptEventsHeaderValue, advanceLastEventId } from './stream-contract'
 import { formatEnvelopeText } from './envelope'
 import { currentConversationFilename } from './conversation-routing'
 import pluginManifest from './.claude-plugin/plugin.json'
@@ -903,7 +903,11 @@ async function _onEvent(evType: string, evId: string, dataStr: string): Promise<
   // E-CHAT-CMD S9: allowlist 밖 event_type 은 content 체크 전에 드롭(sprintable_sse.py:157 동형).
   // fakechat 가 유일하게 이 게이트가 없어 FYI 이벤트(status_changed/file_conflict 등)가 content 만
   // 있으면 세션에 주입되던 보안 갭을 닫는다.
-  if (!isInjectableEventType(data, payload)) return
+  if (!isInjectableEventType(data, payload)) {
+    // story 4788 (AC3): dropped, not acked (the ack is cumulative per agent) — but the next reconnect of this process must not ask for it again: Last-Event-ID moves past it
+    _lastEventId = advanceLastEventId(_lastEventId, evId)
+    return
+  }
 
   // recipient_seq for ack — data 최상위 우선, payload fallback. content 체크보다 먼저 계산해야
   // 아래 빈-content 분기에서도 ack할 수 있다(#2375 AC5).
