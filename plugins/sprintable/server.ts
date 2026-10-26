@@ -17,6 +17,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { isInjectableEventType } from './inject-allowlist'
+import { ACCEPT_EVENTS_HEADER, acceptEventsHeaderValue } from './stream-contract'
 import { formatEnvelopeText } from './envelope'
 import { currentConversationFilename } from './conversation-routing'
 import pluginManifest from './.claude-plugin/plugin.json'
@@ -1064,6 +1065,8 @@ async function _consumeStream(): Promise<void> {
     Accept: 'text/event-stream',
     'Cache-Control': 'no-cache',
   }
+  // story 4788 (INFRA-DIET ③): what this plugin acts on — a server that knows the header sends this connection nothing else (and stops resending, on every reconnect, the events it would only drop)
+  headers[ACCEPT_EVENTS_HEADER] = acceptEventsHeaderValue()
   if (_lastEventId) headers['Last-Event-ID'] = _lastEventId
 
   const resp = await fetch(`${API_URL}/api/v2/agent/stream`, { headers })
