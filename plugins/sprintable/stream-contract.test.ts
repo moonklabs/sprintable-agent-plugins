@@ -47,12 +47,20 @@ describe('Last-Event-ID moves past an event the plugin drops (AC3)', () => {
     expect(advanceLastEventId('25', '10')).toBe('25') // never back
     expect(advanceLastEventId('25', '25')).toBe('25')
   })
+  test('a current value that is not a plain integer is replaced by a good one', () => {
+    expect(advanceLastEventId('abc', '8')).toBe('8')
+    expect(advanceLastEventId('1e3', '8')).toBe('8')
+  })
+  test('large ids compare exactly (beyond 2^53)', () => {
+    expect(advanceLastEventId('9007199254740992', '9007199254740993')).toBe('9007199254740993')
+    expect(advanceLastEventId('9007199254740993', '9007199254740992')).toBe('9007199254740993')
+  })
   test('compares numbers, not strings', () => {
     expect(advanceLastEventId('9', '10')).toBe('10')
     expect(advanceLastEventId('100', '99')).toBe('100')
   })
   test('an id it cannot read changes nothing', () => {
-    for (const bad of ['', 'abc', '0', '-3', 'NaN', 'Infinity']) expect(advanceLastEventId('7', bad)).toBe('7')
+    for (const bad of ['', 'abc', '0', '-3', 'NaN', 'Infinity', '1e3', ' 7', '007', '7 ', '1.5', '+9']) expect(advanceLastEventId('7', bad)).toBe('7')
     expect(advanceLastEventId('', '')).toBe('')
     for (const bad of ['0', '-3', 'abc']) expect(advanceLastEventId('', bad)).toBe('') // (nothing seen yet: still nothing)
   })

@@ -16,11 +16,11 @@ import { INJECTABLE_EVENT_TYPES } from './inject-allowlist'
  * inside a long session (the server ends a stream every few minutes) asked for everything after the last event it acted on and was sent the whole dropped tail again. The header is this
  * connection's own request state — nothing is acked and no other connection is touched — so the dropped events can safely move it. Only forward: a lower or unreadable id changes nothing.
  */
+const SEQ = /^[1-9][0-9]{0,17}$/ // a plain positive integer (the server's gateway seq) — nothing else is ever sent back as Last-Event-ID (`1e3` · ` 7` · `007` would make the server ignore the header)
+
 export function advanceLastEventId(current: string, evId: string): string {
-  const next = Number(evId)
-  if (!evId || !Number.isFinite(next) || next <= 0) return current
-  const have = Number(current)
-  return current && Number.isFinite(have) && have >= next ? current : evId
+  if (!SEQ.test(evId)) return current
+  return SEQ.test(current) && BigInt(current) >= BigInt(evId) ? current : evId
 }
 
 export const ACCEPT_EVENTS_HEADER = 'X-Sprintable-Accept-Events'
